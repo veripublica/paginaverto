@@ -11,6 +11,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **TypeScript types for `@veripublica/paginaverto-wasm`.** `read()` returned
+  `any`; it now returns a `Book`. The `.d.ts` declares:
+  - `Book`, `Chapter`, and `Block`, a union you narrow on `kind`
+    (`"paragraph"` with `text`, `"figure"` with `mediaType`, `ext` and
+    `data`);
+  - `ErrorKind` and `PaginavertoError` for what `read()` throws.
+
+  Checked with `tsc --strict`: correct use compiles; reading `data` from a
+  paragraph, or using a possibly `null` title as a string, is an error. No
+  change at runtime, and none to the Rust crates.
+
 ## [0.1.2] - 2026-10-31
 
 ### Added

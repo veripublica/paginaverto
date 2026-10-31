@@ -22,18 +22,74 @@ use js_sys::{Array, Object, Reflect, Uint8Array};
 use paginaverto::{Block, Book, Error, Input, Options};
 use wasm_bindgen::prelude::*;
 
+/// The shapes `read` returns and throws, for the generated `.d.ts`. The
+/// objects are built by hand in [`to_js`] and [`error`]; a native test keeps
+/// every error kind listed here.
+// Read by the macro below at build time and by a native test; rustc's
+// dead-code pass sees neither use on wasm32.
+#[allow(dead_code)]
+const TS_TYPES: &str = r#"
+/** One piece of chapter content, in reading order. */
+export type Block =
+  | {
+      kind: "paragraph";
+      /** The paragraph's text, whitespace collapsed to single spaces. */
+      text: string;
+    }
+  | {
+      kind: "figure";
+      /** A JPEG verbatim, or raw pixels re-encoded as PNG. */
+      mediaType: "image/jpeg" | "image/png";
+      ext: "jpg" | "png";
+      /** The image file's bytes. */
+      data: Uint8Array;
+    };
+
+/** An optional heading and its content. */
+export interface Chapter {
+  /** The heading that starts the chapter; `null` before the first heading. */
+  title: string | null;
+  blocks: Block[];
+}
+
+/** What a PDF turned into. `chapters` is never empty. */
+export interface Book {
+  chapters: Chapter[];
+}
+
+/** Why a PDF could not be read; the `kind` of a thrown `PaginavertoError`. */
+export type ErrorKind =
+  | "Open"
+  | "ScanNeedsOcr"
+  | "LanguageRequired"
+  | "Models"
+  | "OcrFoundNothing"
+  | "UndecodableFonts"
+  | "NoText"
+  | "QualityGate"
+  | "Internal";
+
+/** What `read` throws: an `Error` whose `kind` names the reason. */
+export interface PaginavertoError extends Error {
+  kind: ErrorKind;
+}
+"#;
+
+#[wasm_bindgen(typescript_custom_section)]
+const TS_SECTION: &str = TS_TYPES;
+
 /// The crate version.
 #[wasm_bindgen]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Read a PDF. Returns `{ chapters: [{ title, blocks }] }`, where each block
-/// is `{ kind: "paragraph", text }` or `{ kind: "figure", mediaType, ext,
-/// data }`. Throws an `Error` whose `kind` names the reason (`Open`,
+/// Read a PDF into a `Book` (chapters of paragraphs and figures). Throws a
+/// `PaginavertoError`: an `Error` whose `kind` names the reason (`Open`,
 /// `ScanNeedsOcr`, `UndecodableFonts`, `NoText`, `QualityGate`, `Internal`)
-/// and whose `message` says it in English.
-#[wasm_bindgen]
+/// and whose `message` says it in English. Text layers only: a scan throws
+/// `ScanNeedsOcr`.
+#[wasm_bindgen(unchecked_return_type = "Book")]
 pub fn read(pdf: &[u8]) -> Result<JsValue, JsValue> {
     match paginaverto::read(Input::Bytes(pdf), &Options::default()) {
         Ok(book) => Ok(to_js(&book)),
@@ -110,5 +166,24 @@ mod tests {
     fn kinds_are_named() {
         assert_eq!(kind(&Error::ScanNeedsOcr), "ScanNeedsOcr");
         assert_eq!(kind(&Error::Internal("x".into())), "Internal");
+    }
+
+    #[test]
+    fn every_kind_is_in_the_typescript_types() {
+        let all = [
+            Error::Open(String::new()),
+            Error::ScanNeedsOcr,
+            Error::LanguageRequired,
+            Error::Models(String::new()),
+            Error::OcrFoundNothing,
+            Error::UndecodableFonts,
+            Error::NoText,
+            Error::QualityGate,
+            Error::Internal(String::new()),
+        ];
+        for e in &all {
+            let k = format!("\"{}\"", kind(e));
+            assert!(TS_TYPES.contains(&k), "{k} missing from ErrorKind");
+        }
     }
 }

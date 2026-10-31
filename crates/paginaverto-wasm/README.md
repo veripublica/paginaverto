@@ -14,10 +14,12 @@ import { read } from "@veripublica/paginaverto-wasm"; // bundler build
 // or, without a bundler: wasm-pack build --target web, then
 // import init, { read } from "./pkg/paginaverto_wasm.js"; await init();
 const book = read(new Uint8Array(await file.arrayBuffer()));
-// book.chapters: [{ title, blocks: [{ kind: "paragraph", text } | { kind: "figure", mediaType, ext, data }] }]
-// A refusal throws an Error with `kind` (Open, ScanNeedsOcr, UndecodableFonts, NoText, QualityGate, Internal).
+// book: Book = { chapters: [{ title, blocks: [{ kind: "paragraph", text } | { kind: "figure", mediaType, ext, data }] }] }
+// A refusal throws a PaginavertoError: an Error with `kind` (Open, ScanNeedsOcr, UndecodableFonts, NoText, QualityGate, Internal).
 ```
 
+- **Typed.** The `.d.ts` declares `Book`, `Chapter`, `Block` (a union you
+  narrow on `kind`), `ErrorKind` and `PaginavertoError`.
 - **Text layers only.** OCR is not built for the browser; a scan throws
   `ScanNeedsOcr`.
 - A panic cannot be caught in WebAssembly: it traps the instance. The demo
