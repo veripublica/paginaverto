@@ -219,7 +219,7 @@ fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
         Input::Path(p) => lopdf::Document::load(p),
         Input::Bytes(b) => lopdf::Document::load_mem(b),
     }
-    .map_err(|e| Error::Open(e.to_string()))?;
+    .map_err(|e| Error::Open(with_causes(&e)))?;
 
     let kind = text::classify(&doc);
     let pages: Vec<text::Page> = match kind {
@@ -247,6 +247,24 @@ fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
         return Err(Error::QualityGate);
     }
     Ok(Book { chapters })
+}
+
+/// An error's message followed by each of its causes, `: `-separated, as
+/// `anyhow`'s `{:#}` prints a chain: "couldn't parse input: invalid file
+/// header", not only the outer "couldn't parse input".
+fn with_causes(e: &dyn std::error::Error) -> String {
+    let mut msg = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        let s = c.to_string();
+        // Some errors repeat their source in their own message; skip those.
+        if !msg.ends_with(&s) {
+            msg.push_str(": ");
+            msg.push_str(&s);
+        }
+        cause = c.source();
+    }
+    msg
 }
 
 /// Real prose is about 80% letters. When at least 50 non-space characters

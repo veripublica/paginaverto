@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-10-31
 
+- `Error::Open` keeps the cause: "couldn't parse input: invalid file
+  header", not only "couldn't parse input" (reported by epublift's parity
+  check). No output changes.
 - `paginaverto-wasm`: WebAssembly bindings (`read`, `version`) and a web page
   on GitHub Pages that reads a PDF's text and chapters in the browser. Text
   layers only. Its output matches the native build on 18 local PDFs.

@@ -295,7 +295,11 @@ fn scan_checks_come_in_order() {
 #[test]
 fn not_a_pdf_is_open_error() {
     let err = read(Input::Bytes(b"this is not a PDF"), &Options::default()).unwrap_err();
-    assert!(matches!(err, Error::Open(_)), "{err:?}");
+    // The cause is kept, not only lopdf's outer message.
+    assert_eq!(
+        err,
+        Error::Open("couldn't parse input: invalid file header".into())
+    );
 }
 
 #[test]
