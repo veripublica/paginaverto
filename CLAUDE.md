@@ -89,15 +89,11 @@ the work, the agents run them, the main session reviews, asks, tags, pushes.
 7. **After:** note to `epublift/inbox/` (version, what changed, the line to
    depend on), copy to conventions when the release matters to the family.
 
-**The first registry release (0.1.2) is published by hand, by Baris**, from a
-clean clone of the tag outside iCloud, before the tag is pushed (the publish
-workflows then find the version there and skip). Then he links trusted
-publishing: crates.io → each of the two crates → Settings → Trusted
-Publishing (repo `veripublica/paginaverto`, workflow `publish-crate.yml`);
-npmjs.com → the package → Settings → Trusted Publisher (org `veripublica`,
-repo `paginaverto`, workflow `publish-npm.yml`, environment empty). Check
-the crates.io link with `publish-crate.yml`'s `verify_only`. Claude never
-enters a token.
+**Trusted publishing is linked** (2026-10-31): crates.io, both crates →
+`publish-crate.yml`; npm, the package → `publish-npm.yml`. 0.1.3 was the
+first release published entirely by the workflows. Check the crates.io link
+any time with `publish-crate.yml`'s `verify_only` (publishes nothing). Claude
+never enters a token; a registry login, if ever needed again, is Baris's.
 
 `release.yml` writes the release page from the tag's CHANGELOG section and
 fails if there is none. `workflow_dispatch` with a `tag` input creates or
