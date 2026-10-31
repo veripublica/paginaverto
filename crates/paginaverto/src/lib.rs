@@ -24,6 +24,12 @@ use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
+mod structure;
+mod text;
+
+#[cfg(feature = "ocr")]
+pub use paginaverto_ocr::{MODEL_BASE_URL, MODELS, ModelFile};
+
 /// Where the PDF comes from.
 #[derive(Debug, Clone, Copy)]
 pub enum Input<'a> {
@@ -197,9 +203,106 @@ pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
     }
 }
 
-fn pipeline(_input: Input<'_>, _opts: &Options) -> Result<Book, Error> {
-    // Step 2 of PLAN-0.1.0: the text path and structure.
-    Err(Error::Internal("not implemented yet".into()))
+fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
+    let doc = match input {
+        Input::Path(p) => lopdf::Document::load(p),
+        Input::Bytes(b) => lopdf::Document::load_mem(b),
+    }
+    .map_err(|e| Error::Open(e.to_string()))?;
+
+    let kind = text::classify(&doc);
+    let pages: Vec<text::Page> = match kind {
+        text::Kind::Scan => scan_pages(&doc, opts)?,
+        text::Kind::TextLayer => {
+            let with_figures = text::is_born_digital(&doc);
+            doc.get_pages()
+                .into_iter()
+                .map(|(num, id)| text::page(&doc, id, num, with_figures))
+                .collect()
+        }
+    };
+
+    let chapters = structure::chapters(&pages);
+    if chapters.is_empty() {
+        return Err(match kind {
+            text::Kind::Scan => Error::OcrFoundNothing,
+            text::Kind::TextLayer if pages.iter().all(|p| p.blocks.is_empty()) => {
+                Error::UndecodableFonts
+            }
+            text::Kind::TextLayer => Error::NoText,
+        });
+    }
+    if fails_quality_gate(&chapters) {
+        return Err(Error::QualityGate);
+    }
+    Ok(Book { chapters })
+}
+
+/// Real prose is about 80% letters. When at least 50 non-space characters
+/// decoded and fewer than 45% of them are letters, the fonts did not decode.
+fn fails_quality_gate(chapters: &[Chapter]) -> bool {
+    let (mut nonspace, mut letters) = (0usize, 0usize);
+    let paragraphs = chapters
+        .iter()
+        .flat_map(|c| &c.blocks)
+        .filter_map(|b| match b {
+            Block::Paragraph(p) => Some(p),
+            Block::Figure(_) => None,
+        });
+    for ch in paragraphs.flat_map(|p| p.chars()) {
+        if !ch.is_whitespace() {
+            nonspace += 1;
+            if ch.is_alphabetic() {
+                letters += 1;
+            }
+        }
+    }
+    // PARITY: chapter titles are not counted.
+    nonspace >= 50 && (letters as f32) < nonspace as f32 * 0.45
+}
+
+/// Recognise every page of a scan. Checks run in epublift's order: OCR
+/// available, then the language, then the models.
+#[cfg(feature = "ocr")]
+fn scan_pages(doc: &lopdf::Document, opts: &Options) -> Result<Vec<text::Page>, Error> {
+    let Ocr::Models {
+        detection,
+        recognition,
+    } = &opts.ocr
+    else {
+        return Err(Error::ScanNeedsOcr);
+    };
+    // Required, though 0.1.0 does not use it yet.
+    if opts.language.as_deref().is_none_or(str::is_empty) {
+        return Err(Error::LanguageRequired);
+    }
+    let engine = paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
+        .map_err(|e| Error::Models(e.to_string()))?;
+    Ok(doc
+        .get_pages()
+        .into_values()
+        .map(|id| {
+            // PARITY: a page whose image is missing, undecodable, or fails
+            // recognition becomes an empty page, silently.
+            let lines = text::scan_image(doc, id)
+                .and_then(|fig| engine.recognise(&fig.data).ok())
+                .unwrap_or_default();
+            text::Page {
+                blocks: lines
+                    .iter()
+                    .map(|l| text::squash(&l.text))
+                    .filter(|l| !l.is_empty())
+                    .collect(),
+                ..text::Page::default()
+            }
+        })
+        .collect())
+}
+
+/// Built without OCR: a scan is refused.
+#[cfg(not(feature = "ocr"))]
+fn scan_pages(_doc: &lopdf::Document, _opts: &Options) -> Result<Vec<text::Page>, Error> {
+    Err(Error::ScanNeedsOcr)
 }
 
 #[cfg(test)]
