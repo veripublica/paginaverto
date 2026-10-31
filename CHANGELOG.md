@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `paginaverto-wasm`: WebAssembly bindings (`read`, `version`) and a web page
+  on GitHub Pages that reads a PDF's text and chapters in the browser. Text
+  layers only. Its output matches the native build on 18 local PDFs.
+
 ## 0.1.0 — 2026-10-31
 
 - Workspace: `paginaverto` (library) and `paginaverto-ocr` (character

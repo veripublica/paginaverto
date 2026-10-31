@@ -24,7 +24,7 @@ jobs:
       - name: Default build pulls no OCR engine
         run: |
           set -euo pipefail
-          if cargo tree -p paginaverto -e normal --locked | grep -E '^.*(ocrs|rten) v'; then
+          if cargo tree -p paginaverto -p paginaverto-wasm -e normal --locked | grep -E '^.*(ocrs|rten) v'; then
             echo "error: the default build pulls ocrs/rten" >&2; exit 1
           fi
 
@@ -37,6 +37,13 @@ jobs:
         run: |
           cargo test --workspace --locked
           cargo test --workspace --locked --features paginaverto/ocr
+
+      # The browser crate must keep compiling for wasm32 (lopdf's getrandom
+      # needs its Web Crypto backend there).
+      - name: Build paginaverto-wasm for wasm32
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build -p paginaverto-wasm --target wasm32-unknown-unknown --locked
 
       - name: Docs (rustdoc, warnings denied)
         env:

@@ -1,0 +1,27 @@
+[package]
+name = "paginaverto-wasm"
+description = "WebAssembly bindings for paginaverto: read a PDF into chapters in the browser, no upload."
+readme = "README.md"
+keywords = ["pdf", "wasm", "text-extraction"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# A thin JS boundary over paginaverto's public API; no reading logic of its own.
+# Text layers only: OCR is not built for the browser (no models to ship yet).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+paginaverto = { path = "../paginaverto" }
+wasm-bindgen = "0.2.129"
+js-sys = "0.3.106"
+
+# lopdf pulls getrandom 0.4, which in a browser needs its Web Crypto backend.
+# Target-specific, so no native build (epublift's included) is affected.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }

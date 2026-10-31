@@ -30,6 +30,10 @@ first consumer: it builds EPUBs from paginaverto's output.
   `crates/paginaverto-ocr` (ocrs + rten). The default build must never pull
   ocrs/rten (CI checks it).
 - The seam between the two crates is positioned text: OCR yields `Line`s.
+- `crates/paginaverto-wasm`: browser bindings + `demo/` (family-web template
+  v7 copies, never edited; re-copy from a family-web tag). `pages.yml`
+  deploys it to `veripublica.github.io/paginaverto/` on every push to
+  `main`. Text layers only. The nav list comes from family-web's `nav.json`.
 - Edition 2024, MSRV 1.97 (never newer than epublift's). `Send`, no global
   state, no network: OCR models come from the caller as bytes.
 - Errors are values. `read` catches panics and returns `Error::Internal`.

@@ -1,0 +1,308 @@
+<!doctype html>
+<!-- family-web template v7 (family-web v0.7.1) -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>paginaverto — the text and chapters of a PDF, in your browser</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./demo.css" />
+    <script>
+      // Theme, part 1 of 2 (part 2 is the toggle button in the .topbar).
+      //
+      // This MUST stay here: in <head>, inline, and not deferred. It runs before
+      // the first paint, so a reader who chose dark never sees a white flash on
+      // the way to it. Move it to the module script at the bottom and the flash
+      // comes back — which is the whole bug this guards against.
+      //
+      // Guarded on light-dark(): without it, data-theme moves the scrollbars and
+      // nothing else (see the floor in tokens.css), so we don't set it at all.
+      // try/catch because localStorage throws when storage is blocked.
+      try {
+        if (CSS.supports("color", "light-dark(#000,#fff)")) {
+          const t = localStorage.getItem("theme");
+          if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+        }
+      } catch {}
+    </script>
+    <style>
+      .chapter { border-top: 1px solid var(--border); padding: .5rem 0; }
+      .chapter > summary { cursor: pointer; font-weight: 600; }
+      .chapter > summary .n { color: var(--muted); font-weight: 400; margin-left: .5rem; }
+      .chapter .untitled { color: var(--muted); font-style: italic; }
+      .chapter p { margin: .6rem 0; overflow-wrap: anywhere; }
+      .chapter img { display: block; max-width: 100%; height: auto; margin: .75rem 0; }
+      .limits { color: var(--muted); font-size: .9rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="topbar">
+        <h1>paginaverto</h1>
+
+        <button class="theme-toggle" id="theme" type="button"></button>
+        <script>
+          (() => {
+            const root = document.documentElement;
+            const btn = document.getElementById("theme");
+            const cycle = ["auto", "dark", "light"];
+            const label = { auto: "◐ auto", dark: "☾ dark", light: "☀ light" };
+            const save = (v) => {
+              try {
+                v ? localStorage.setItem("theme", v) : localStorage.removeItem("theme");
+              } catch {}
+            };
+            const current = () => root.dataset.theme || "auto";
+            const paint = () => {
+              btn.textContent = label[current()];
+              btn.title = "Theme: " + current() + " — click to change";
+            };
+            btn.addEventListener("click", () => {
+              const next = cycle[(cycle.indexOf(current()) + 1) % cycle.length];
+              if (next === "auto") delete root.dataset.theme;
+              else root.dataset.theme = next;
+              save(next === "auto" ? null : next);
+              paint();
+            });
+            paint();
+          })();
+        </script>
+      </div>
+      <p class="sub">A pure-Rust PDF reader running entirely in your browser — no upload, no server. Your file never leaves this page.</p>
+
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".pdf,application/pdf" />
+        Drop a <strong>.pdf</strong> here, or click to choose one.
+      </label>
+
+      <p class="limits">It reads PDFs that carry a text layer: born-digital books and searchable scans. A scan without a text layer needs character recognition, which the library has and this page does not yet.</p>
+
+      <p class="status" id="status">Loading the reader…</p>
+
+      <section id="result" hidden>
+        <p class="counts" id="counts"></p>
+        <div id="chapters"></div>
+      </section>
+
+      <footer>
+        Built with <code>wasm-pack</code> from the <code>paginaverto-wasm</code> crate.
+        <span id="ver"></span>
+        <nav class="family">
+          A <a href="https://github.com/veripublica">veripublica</a> tool ·
+          <span id="family-tools">
+            <a href="https://github.com/veripublica/epubveri">epubveri</a>
+            <a href="https://github.com/veripublica/epubsana">epubsana</a>
+            <a href="https://github.com/veripublica/kepubverto">kepubverto</a>
+            <a href="https://github.com/veripublica/paginaverto" aria-current="page">paginaverto</a>
+            <a href="https://github.com/ePubLift/epublift">epublift</a>
+          </span>
+        </nav>
+        <script>
+          // Family nav: the current list, without a release in every tool (#2).
+          //
+          // What is shared is DATA, not code. nav.json is read as JSON and turned
+          // into links with createElement/textContent; nothing from it is ever
+          // parsed as HTML or run. A bad entry is skipped, a bad file or a failed
+          // fetch leaves the fallback list above exactly as it was.
+          //
+          // Same host as the live demos (veripublica.github.io), so no third party
+          // is involved, and the request carries nothing from the page: not the
+          // reader's file, not a result. The no-upload promise above still holds.
+          (() => {
+            const box = document.getElementById("family-tools");
+            // This tool = the fallback's aria-current link, matched by name OR URL,
+            // so renaming either one in nav.json keeps "you are here" (#16).
+            const mark = box.querySelector('a[aria-current="page"]');
+            const here = { name: mark?.textContent.trim(), url: mark?.getAttribute("href") };
+            fetch("https://veripublica.github.io/family-web/nav.json")
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
+                // GitHub only. Which repositories may appear is checked in family-web
+                // (check-nav.mjs, #13); the page holds just the host, so a new
+                // exception there never means a re-copy here.
+                const tools = (Array.isArray(data?.tools) ? data.tools : []).filter(
+                  (t) => typeof t?.name === "string" && /^https:\/\/github\.com\/[^\s]+$/.test(t?.url ?? ""),
+                );
+                if (!tools.length) return;
+                const key = (list) => list.map((t) => t.name + " " + t.url).join("\n");
+                const shown = [...box.querySelectorAll("a")].map((a) => ({
+                  name: a.textContent.trim(),
+                  url: a.getAttribute("href"),
+                }));
+                if (key(tools) === key(shown)) return; // already current: leave focus alone
+                box.replaceChildren(
+                  ...tools.flatMap((t) => {
+                    const a = document.createElement("a");
+                    a.href = t.url;
+                    a.textContent = t.name;
+                    if (t.name === here.name || t.url === here.url) a.setAttribute("aria-current", "page");
+                    return [a, " "];
+                  }),
+                );
+              })
+              .catch(() => {});
+          })();
+        </script>
+      </footer>
+    </main>
+
+    <script type="module">
+      // The reading runs in a worker: a long PDF never freezes the page, and a
+      // crash inside the WebAssembly (a panic cannot be caught there) costs the
+      // worker, not the page. A new worker starts for the next file.
+      const pkg = new URL("../pkg/paginaverto_wasm.js", import.meta.url).href;
+      const workerUrl = new URL("./worker.js", import.meta.url);
+
+      const statusEl = document.getElementById("status");
+      const dropEl = document.getElementById("drop");
+      const fileEl = document.getElementById("file");
+      const resultEl = document.getElementById("result");
+      const countsEl = document.getElementById("counts");
+      const chaptersEl = document.getElementById("chapters");
+
+      let worker = null;
+      let busy = false;
+      let urls = [];
+
+      // Resolves once the reader has loaded, with its version.
+      function start() {
+        worker = new Worker(workerUrl, { type: "module" });
+        return call({ type: "init", pkg });
+      }
+
+      function call(msg, transfer = []) {
+        return new Promise((resolve, reject) => {
+          worker.onmessage = (e) => (e.data.ok ? resolve(e.data) : reject(e.data));
+          worker.onerror = (e) => {
+            e.preventDefault();
+            reject({ kind: "Internal", message: e.message || "the reader stopped" });
+          };
+          worker.postMessage(msg, transfer);
+        });
+      }
+
+      const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+
+      // Plain words for the reader. The library's own message follows for
+      // the kinds where it adds something.
+      const explain = {
+        Open: "This file could not be opened as a PDF.",
+        ScanNeedsOcr: "This PDF is a scan with no text layer. Reading it needs character recognition, which this page cannot do yet.",
+        UndecodableFonts: "This PDF has a text layer, but its fonts cannot be decoded yet.",
+        NoText: "No text could be extracted from this PDF.",
+        QualityGate: "The text in this PDF did not decode cleanly (mostly non-letters), so it is not shown.",
+        Internal: "The reader failed on this file. Please report it, if you can share the PDF.",
+      };
+
+      function show(book) {
+        urls.forEach(URL.revokeObjectURL);
+        urls = [];
+        chaptersEl.replaceChildren();
+        let paragraphs = 0;
+        let figures = 0;
+        for (const ch of book.chapters) {
+          const d = document.createElement("details");
+          d.className = "chapter";
+          const s = document.createElement("summary");
+          const t = document.createElement("span");
+          if (ch.title === null) {
+            t.className = "untitled";
+            t.textContent = "Before the first heading";
+          } else {
+            t.textContent = ch.title;
+          }
+          const p = ch.blocks.filter((b) => b.kind === "paragraph").length;
+          const f = ch.blocks.length - p;
+          paragraphs += p;
+          figures += f;
+          const n = document.createElement("span");
+          n.className = "n";
+          n.textContent = plural(p, "paragraph", "paragraphs") + (f ? ", " + plural(f, "figure", "figures") : "");
+          s.append(t, n);
+          d.append(s);
+          // Filled on first open: a book's figures can be many megabytes.
+          d.addEventListener(
+            "toggle",
+            () => {
+              for (const b of ch.blocks) {
+                if (b.kind === "paragraph") {
+                  const el = document.createElement("p");
+                  el.textContent = b.text;
+                  d.append(el);
+                } else {
+                  const img = document.createElement("img");
+                  const u = URL.createObjectURL(new Blob([b.data], { type: b.mediaType }));
+                  urls.push(u);
+                  img.src = u;
+                  img.alt = "Figure";
+                  d.append(img);
+                }
+              }
+            },
+            { once: true },
+          );
+          chaptersEl.append(d);
+        }
+        countsEl.textContent =
+          plural(book.chapters.length, "chapter", "chapters") + " · " +
+          plural(paragraphs, "paragraph", "paragraphs") + " · " +
+          plural(figures, "figure", "figures");
+        resultEl.hidden = false;
+      }
+
+      async function run(file) {
+        if (busy || !worker) return;
+        busy = true;
+        resultEl.hidden = true;
+        statusEl.textContent = "Reading " + file.name + "…";
+        const t0 = performance.now();
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const r = await call({ type: "read", bytes }, [bytes.buffer]);
+          const s = ((performance.now() - t0) / 1000).toFixed(1);
+          statusEl.textContent = file.name + " — read in " + s + " s. Open a chapter to see its text.";
+          show(r.book);
+        } catch (e) {
+          const kind = e?.kind ?? "Internal";
+          statusEl.textContent = file.name + ": " + (explain[kind] ?? e?.message ?? String(e));
+          if (kind === "Internal") {
+            worker.terminate();
+            await start().catch(() => {});
+          }
+        } finally {
+          busy = false;
+        }
+      }
+
+      start()
+        .then((r) => {
+          statusEl.textContent = "Ready. Drop a .pdf.";
+          document.getElementById("ver").textContent = "paginaverto-wasm v" + r.version;
+        })
+        .catch((e) => {
+          worker = null;
+          statusEl.textContent = "Failed to load: " + (e?.message ?? e);
+        });
+
+      fileEl.addEventListener("change", () => {
+        if (fileEl.files.length) run(fileEl.files[0]);
+      });
+      ["dragenter", "dragover"].forEach((ev) =>
+        dropEl.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropEl.classList.add("over");
+        }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dropEl.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropEl.classList.remove("over");
+        }),
+      );
+      dropEl.addEventListener("drop", (e) => {
+        const f = e.dataTransfer?.files?.[0];
+        if (f) run(f);
+      });
+    </script>
+  </body>
+</html>

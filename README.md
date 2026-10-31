@@ -13,6 +13,11 @@ release: it does exactly what
 cli-v4.5.1, so that epublift can move to it. The structured document
 described under [Scope](#scope) comes from 0.2.0 on.
 
+**In your browser:** <https://veripublica.github.io/paginaverto/> reads a
+PDF's text and chapters without installing anything; the file never leaves
+the page. It reads PDFs with a text layer; scans need OCR, which the browser
+page does not have yet.
+
 ## What 0.1.0 does
 
 It reads a PDF into a book: chapters, each with an optional title and its
@@ -147,6 +152,8 @@ What paginaverto is for, beyond 0.1.0:
 - `crates/paginaverto-ocr`: character recognition, used through the `ocr`
   feature. It hands the rest of paginaverto lines of text, so the PDF side
   and the structure step never depend on the OCR engine.
+- `crates/paginaverto-wasm`: the WebAssembly bindings and the web page
+  (`demo/`), deployed to GitHub Pages on every push to `main`.
 
 Minimum Rust version: 1.97.
 

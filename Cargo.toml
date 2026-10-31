@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/paginaverto", "crates/paginaverto-ocr"]
+members = ["crates/paginaverto", "crates/paginaverto-ocr", "crates/paginaverto-wasm"]
 resolver = "3"
 
 [workspace.package]
@@ -24,3 +24,11 @@ ocrs = "=0.13.1"
 rten = "=0.26.0"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 regex = "1.13.1"
+
+# family-web's measured WASM profile (wasm/BUILD-PROFILE.md): smaller and
+# faster than the default. Native builds of this workspace only; a crate that
+# depends on paginaverto (epublift) keeps its own profile.
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
