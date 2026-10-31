@@ -1,29 +1,78 @@
 # Changelog
 
-## 0.1.1 — 2026-10-31
+All notable changes to `paginaverto` (and `paginaverto-ocr` and
+`paginaverto-wasm`, which track the same version) are documented here. Each
+version's section is also its GitHub Release notes.
 
-- `Error::Open` keeps the cause: "couldn't parse input: invalid file
-  header", not only "couldn't parse input" (reported by epublift's parity
-  check). No output changes.
-- `paginaverto-wasm`: WebAssembly bindings (`read`, `version`) and a web page
-  on GitHub Pages that reads a PDF's text and chapters in the browser. Text
-  layers only. Its output matches the native build on 18 local PDFs.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+paginaverto is pre-1.0, so breaking changes land as minor-version bumps
+(`0.x.0`), per [Cargo's SemVer compatibility
+rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## 0.1.0 — 2026-10-31
+## [Unreleased]
 
-- Workspace: `paginaverto` (library) and `paginaverto-ocr` (character
-  recognition, behind the `ocr` feature).
-- Public API: `read`, `Input`, `Options`, `Ocr`, `Book`, `Chapter`, `Block`,
-  `Figure`, `Error`. A panic in a dependency is returned as `Error::Internal`.
-- The text layer: classification, our own content-stream reader with a
-  `/ToUnicode` CMap parser and glyph-width word spacing, lopdf's extractor,
-  the cleaner of the two per page, figures (JPEG verbatim, raw gray/RGB as
-  PNG).
-- Structure: running heads and feet, page numbers, line-break hyphens,
-  headings by capitals or font size, chapters.
-- OCR: ocrs 0.13.1 models from the caller's bytes, flat-field illumination
-  correction. Model names, URL and SHA-256 exported.
-- Everything reproduces epublift cli-v4.5.1's PDF import, quirks included
-  (marked `PARITY:` in the code).
-- README: what 0.1.0 does, how to use it and its OCR models, accuracy and
-  parity, the known limits kept on purpose.
+## [0.1.1] - 2026-10-31
+
+### Added
+
+- **A web page:** <https://veripublica.github.io/paginaverto/> reads a PDF's
+  text and chapters in the browser, with nothing installed and no upload.
+  - It reads PDFs with a text layer. Scans need OCR, which the page does not
+    have yet.
+  - The new `paginaverto-wasm` crate gives JavaScript `read()` and
+    `version()`.
+  - On 18 local PDFs, its output is identical to the native build's.
+
+### Fixed
+
+- `Error::Open` keeps its cause. A file that is not a PDF reads "couldn't
+  parse input: invalid file header" again, not only "couldn't parse input".
+  Found by epublift's parity check. No output changes.
+
+## [0.1.0] - 2026-10-31
+
+The first release: epublift's PDF import (cli-v4.5.1), rewritten as a
+library with the same output, so that epublift can build on it.
+
+### Added
+
+- **`paginaverto::read`** turns a PDF into a book: chapters, each with an
+  optional title and its paragraphs and figures in reading order. It reads:
+  - **born-digital PDFs.** Simple fonts and Type0/CID fonts with a
+    `/ToUnicode` map are both read, and word spaces come from the fonts'
+    real glyph widths;
+  - **scans with an embedded OCR text layer.** That layer is reused;
+  - **pure scans**, through character recognition (the `ocr` feature, with
+    ocrs models the caller supplies).
+- **Structure:**
+  - running heads and feet and page numbers are removed;
+  - words split by a line-break hyphen are joined;
+  - headings start chapters, found by capitals, or by font size on
+    born-digital pages.
+- **Figures:** JPEG images come through verbatim; raw gray and RGB images
+  are re-encoded as PNG.
+- **Errors are values.** A PDF that cannot be read is refused with an
+  `Error` saying why. A panic in a dependency comes back as
+  `Error::Internal`; it never reaches the caller.
+- **OCR models:** `paginaverto::MODELS` names the two ocrs model files and
+  their SHA-256. paginaverto never downloads them.
+  - As of 2026-10-31 the ocrs bucket no longer serves the `.rten` files.
+- **Measured parity:** on 18 local PDFs, two of them scans and one refused,
+  chapters, paragraphs and figures are byte-identical to epublift
+  cli-v4.5.1's import, and the refusal is the same kind. epublift's own
+  check, entry by entry in the built EPUBs, agrees.
+
+### Known limits
+
+They are kept on purpose for parity, to be fixed from 0.2.0 on, each one
+measured:
+
+- OCR reads ASCII only (the ocrs 0.13.1 model);
+- non-ASCII capitals are not lowercased when headings are matched;
+- paragraphs can be coarse;
+- figures are placed per page;
+- tables and equations come out as text;
+- vector-only PDFs cannot be read;
+- there are no limits, no progress report and no cancel yet.
+
+See the README.

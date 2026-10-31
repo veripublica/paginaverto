@@ -50,26 +50,40 @@ cargo +1.97 check --workspace --locked --features paginaverto/ocr
 
 ## Releasing
 
-Library only, as a git tag; no crates.io, no binaries (0.1.x). Commit, tag
-and push only when Baris says so.
+Library only, as a git tag, with a GitHub Release page; no crates.io, no
+binaries (0.1.x). **Commit, tag and push only with Baris's explicit yes,
+each time, asked right before the tag** — an earlier yes to the work does
+not cover the release. The family's model (kepubverto, epubsana): scripts do
+the work, the agents run them, the main session reviews, asks, tags, pushes.
 
-1. **Bump:** `version` in `[workspace.package]` and the `paginaverto-ocr`
-   entry in `[workspace.dependencies]` (`=X.Y.Z`), both in `Cargo.toml`;
-   then `cargo check --workspace` so `Cargo.lock` follows. Do not run a
-   plain `cargo update`.
-2. **CHANGELOG.md:** rename `## Unreleased` to `## X.Y.Z — YYYY-MM-DD`.
-3. **Pre-flight:** every command under *Checks*, plus
-   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --features paginaverto/ocr`
-   and the default-build check:
-   `cargo tree -p paginaverto -e normal --locked | grep -E '(ocrs|rten) v'`
-   must print nothing.
-4. **Commit** `Release X.Y.Z`, then an annotated tag `vX.Y.Z`; push `main`
-   and the tag.
-5. **Verify:** the CI run on the tagged commit is green
-   (`gh run list --commit <sha>`), and the tag resolves:
-   `git ls-remote --tags origin vX.Y.Z`.
-6. **Tell epublift** by note (copy to conventions) with the exact
-   `Cargo.toml` line.
+1. **Notes first.** Every change goes into `CHANGELOG.md` under
+   `## [Unreleased]`, Keep a Changelog headings (`### Added`, `### Changed`,
+   `### Fixed`, `### Security`), written for a reader of the release page.
+   That section *is* the release notes.
+2. `scripts/bump.sh X.Y.Z`: workspace version, the `=X.Y.Z` pin of
+   paginaverto-ocr, `Cargo.lock` (three entries only), `[Unreleased]` →
+   `[X.Y.Z] - YYYY-MM-DD` under a fresh empty `[Unreleased]`. Read the diff,
+   sweep `README.md` for stale numbers, commit `Release X.Y.Z` (no
+   attribution).
+3. **`release-prep` agent** runs `scripts/preflight.sh X.Y.Z`: version and
+   lock, notes present and `[Unreleased]` empty, clean tree, tag free, not
+   behind origin, no attribution since the last tag, every CI gate (fmt,
+   clippy ×3, tests ×2, doc, no ocrs/rten by default, wasm-pack, audit,
+   MSRV). Quote its last line (`READY` / `NOT READY`).
+4. **Ask Baris**, with the version, the notes, and the preflight verdict.
+5. On his yes: `git tag -a vX.Y.Z -m "…"` and `git push origin main vX.Y.Z`
+   (main and tag together).
+6. **`release-verify` agent** runs `scripts/wait-runs.sh vX.Y.Z` (three
+   runs: CI, Pages, Release) then `scripts/release-verify.sh X.Y.Z` (tag on
+   origin, release page published with the CHANGELOG section and the
+   `Cargo.toml` line, the tag resolves as a dependency, web page up). Quote
+   both verdicts.
+7. **After:** note to `epublift/inbox/` (version, what changed, the line to
+   depend on), copy to conventions when the release matters to the family.
+
+`release.yml` writes the release page from the tag's CHANGELOG section and
+fails if there is none. `workflow_dispatch` with a `tag` input creates or
+refreshes the page of an existing tag (notes from main's CHANGELOG).
 
 ## Data rules
 

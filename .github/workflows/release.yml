@@ -1,0 +1,71 @@
+name: Release
+
+# Creates the GitHub Release for a `v*` tag, its body taken from that
+# version's CHANGELOG.md section, so release notes are never written by hand
+# and never forgotten (epubveri's v0.5.x shipped blank release pages while
+# their CHANGELOG entries existed). The family's release-binaries.yml does
+# the same; paginaverto has no binaries and is not on crates.io yet, so this
+# is that workflow's notes step alone.
+#
+# workflow_dispatch fills in or refreshes the release of an existing tag (the
+# notes come from main's CHANGELOG.md).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to create or update the release for (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" {inblk=1; next}
+            inblk && /^## \[/ {exit}
+            inblk { if (!started && $0 ~ /^[[:space:]]*$/) next; started=1; buf[n++]=$0 }
+            END { last=n-1; while (last>=0 && buf[last] ~ /^[[:space:]]*$/) last--; for (i=0;i<=last;i++) print buf[i] }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          # A tag whose version has no CHANGELOG section would otherwise get an
+          # empty release page: the very failure this step exists to prevent.
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "error: no '## [$ver]' section in CHANGELOG.md — add it before tagging" >&2
+            exit 1
+          fi
+          {
+            printf '\n\n**Use it** (a git tag; not on crates.io yet):\n\n'
+            printf '```toml\npaginaverto = { git = "https://github.com/veripublica/paginaverto", tag = "%s" }\n```\n\n' "$TAG"
+            printf 'Full notes: [CHANGELOG.md](https://github.com/veripublica/paginaverto/blob/main/CHANGELOG.md). In your browser: <https://veripublica.github.io/paginaverto/>.\n'
+          } >> RELEASE_NOTES.md
+          echo "----- extracted release notes -----"
+          cat RELEASE_NOTES.md
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file RELEASE_NOTES.md
+          fi
