@@ -1,0 +1,26 @@
+[package]
+name = "paginaverto"
+description = "Reads PDFs and page images and turns them into a structured document, in pure Rust."
+readme = "../../README.md"
+keywords = ["pdf", "ocr", "text-extraction", "document"]
+categories = ["text-processing", "parser-implementations"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Character recognition for scans with no text layer. Pulls ocrs and rten
+# through paginaverto-ocr; without it a scan is refused with
+# `Error::ScanNeedsOcr`.
+ocr = ["dep:paginaverto-ocr"]
+
+[dependencies]
+lopdf.workspace = true
+image.workspace = true
+regex.workspace = true
+paginaverto-ocr = { workspace = true, optional = true }

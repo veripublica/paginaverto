@@ -1,0 +1,26 @@
+[workspace]
+members = ["crates/paginaverto", "crates/paginaverto-ocr"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+# No newer than epublift's (latest stable - 2), its first consumer.
+rust-version = "1.97"
+license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
+repository = "https://github.com/veripublica/paginaverto"
+homepage = "https://github.com/veripublica/paginaverto"
+# 0.1.0 ships as a git tag, not on crates.io (Baris, 2026-10-31).
+publish = false
+
+[workspace.dependencies]
+paginaverto-ocr = { path = "crates/paginaverto-ocr", version = "=0.0.0" }
+# 0.1.0 is a parity release with epublift cli-v4.5.1: the engines are pinned
+# to the exact versions epublift's Cargo.lock resolves, because their
+# behaviour (lopdf's `extract_text` above all) is part of the output.
+# Upgrade only from 0.2.0 on, and measure.
+lopdf = "=0.45.0"
+ocrs = "=0.13.1"
+rten = "=0.26.0"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+regex = "1.13.1"

@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Format (cargo fmt --check)
+        run: cargo fmt --all --check
+
+      # The default build must stay light: no ocrs, no rten (epublift's web
+      # and default builds depend on that).
+      - name: Default build pulls no OCR engine
+        run: |
+          set -euo pipefail
+          if cargo tree -p paginaverto -e normal --locked | grep -E '^.*(ocrs|rten) v'; then
+            echo "error: the default build pulls ocrs/rten" >&2; exit 1
+          fi
+
+      - name: Clippy (default, then ocr)
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy --workspace --all-targets --locked --features paginaverto/ocr -- -D warnings
+
+      - name: Test (default, then ocr)
+        run: |
+          cargo test --workspace --locked
+          cargo test --workspace --locked --features paginaverto/ocr
+
+      - name: Docs (rustdoc, warnings denied)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked --features paginaverto/ocr
+
+  # The declared MSRV, actually compiled.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the declared MSRV
+        id: msrv
+        run: |
+          set -euo pipefail
+          v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          test -n "$v" || { echo "error: no rust-version in Cargo.toml" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install it
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          rustup default "${{ steps.msrv.outputs.version }}"
+
+      - name: Compile at the floor
+        run: cargo check --workspace --locked --features paginaverto/ocr
+
+  # RustSec audit of Cargo.lock, its own job: its verdict depends on the
+  # advisory database, not on our commit.
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Audit dependencies
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,18 @@
+[package]
+name = "paginaverto-ocr"
+description = "Character recognition for paginaverto: page image in, lines of text out."
+readme = "../../README.md"
+keywords = ["ocr", "text-recognition"]
+categories = ["text-processing"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[dependencies]
+ocrs.workspace = true
+rten.workspace = true
+image.workspace = true
