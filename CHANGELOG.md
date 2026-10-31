@@ -11,6 +11,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-31
+
 ### Added
 
 - **TypeScript types for `@veripublica/paginaverto-wasm`.** `read()` returned
