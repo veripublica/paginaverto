@@ -42,14 +42,17 @@ comes back as `Error::Internal`. It does no network access.
 
 ## Use
 
-0.1.0 is distributed as a git tag, not on crates.io:
+From crates.io (0.1.2 on; 0.1.0 and 0.1.1 are git tags only):
 
 ```toml
 [dependencies]
-paginaverto = { git = "https://github.com/veripublica/paginaverto", tag = "v0.1.0" }
+paginaverto = "0.1"
 # With OCR for scans:
-# paginaverto = { git = "…", tag = "v0.1.0", features = ["ocr"] }
+# paginaverto = { version = "0.1", features = ["ocr"] }
 ```
+
+In JavaScript, the text-layer reader is on npm as
+[`@veripublica/paginaverto-wasm`](https://www.npmjs.com/package/@veripublica/paginaverto-wasm).
 
 ```rust
 use paginaverto::{Block, Input, Options, read};

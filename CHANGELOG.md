@@ -13,6 +13,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Added
 
+- **On crates.io and npm.** `paginaverto` and `paginaverto-ocr` are on
+  crates.io, so `paginaverto = "0.1"` replaces the git dependency. The
+  browser binding is on npm as `@veripublica/paginaverto-wasm`. From here
+  on, every release publishes all three from its tag, through trusted
+  publishing (no stored token).
+
 - **OCR models in ONNX form,** the files ocrs serves today:
   `paginaverto::ONNX_MODELS` names them and gives their SHA-256. The `.rten`
   files (`paginaverto::MODELS`) still load, but the ocrs bucket answers 403

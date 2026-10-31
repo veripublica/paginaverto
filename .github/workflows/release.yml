@@ -4,8 +4,8 @@ name: Release
 # version's CHANGELOG.md section, so release notes are never written by hand
 # and never forgotten (epubveri's v0.5.x shipped blank release pages while
 # their CHANGELOG entries existed). The family's release-binaries.yml does
-# the same; paginaverto has no binaries and is not on crates.io yet, so this
-# is that workflow's notes step alone.
+# the same; paginaverto has no binaries, so this is that workflow's notes step
+# alone. crates.io and npm are publish-crate.yml and publish-npm.yml.
 #
 # workflow_dispatch fills in or refreshes the release of an existing tag (the
 # notes come from main's CHANGELOG.md).
@@ -50,11 +50,17 @@ jobs:
             echo "error: no '## [$ver]' section in CHANGELOG.md — add it before tagging" >&2
             exit 1
           fi
-          {
-            printf '\n\n**Use it** (a git tag; not on crates.io yet):\n\n'
-            printf '```toml\npaginaverto = { git = "https://github.com/veripublica/paginaverto", tag = "%s" }\n```\n\n' "$TAG"
-            printf 'Full notes: [CHANGELOG.md](https://github.com/veripublica/paginaverto/blob/main/CHANGELOG.md). In your browser: <https://veripublica.github.io/paginaverto/>.\n'
-          } >> RELEASE_NOTES.md
+          # Versions up to 0.1.1 were git tags only; from 0.1.2 on they are
+          # also on crates.io and npm.
+          if [ "$(printf '%s\n' "$ver" 0.1.2 | sort -V | head -1)" = 0.1.2 ]; then
+            printf '\n\nFull notes: [CHANGELOG.md](https://github.com/veripublica/paginaverto/blob/main/CHANGELOG.md). Also on [crates.io](https://crates.io/crates/paginaverto/%s) and [npm](https://www.npmjs.com/package/@veripublica/paginaverto-wasm/v/%s). In your browser: <https://veripublica.github.io/paginaverto/>.\n' "$ver" "$ver" >> RELEASE_NOTES.md
+          else
+            {
+              printf '\n\n**Use it** (a git tag; this version is not on crates.io):\n\n'
+              printf '```toml\npaginaverto = { git = "https://github.com/veripublica/paginaverto", tag = "%s" }\n```\n\n' "$TAG"
+              printf 'Full notes: [CHANGELOG.md](https://github.com/veripublica/paginaverto/blob/main/CHANGELOG.md). In your browser: <https://veripublica.github.io/paginaverto/>.\n'
+            } >> RELEASE_NOTES.md
+          fi
           echo "----- extracted release notes -----"
           cat RELEASE_NOTES.md
 

@@ -10,7 +10,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish.workspace = true
+# On crates.io (Baris, 2026-10-31). The licence files are copies of the
+# repository's (a package holds only its own directory); preflight.sh checks
+# they still match.
+include = ["/src", "/tests", "/LICENSE", "/LICENSE-COMMERCIAL.md"]
 
 [features]
 default = []

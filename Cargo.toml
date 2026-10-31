@@ -10,8 +10,6 @@ rust-version = "1.97"
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
 repository = "https://github.com/veripublica/paginaverto"
 homepage = "https://github.com/veripublica/paginaverto"
-# 0.1.0 ships as a git tag, not on crates.io (Baris, 2026-10-31).
-publish = false
 
 [workspace.dependencies]
 paginaverto-ocr = { path = "crates/paginaverto-ocr", version = "=0.1.1" }

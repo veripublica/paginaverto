@@ -7,9 +7,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-repository.workspace = true
+# npm's canonical repository.url form (wasm-pack copies it into package.json).
+repository = "git+https://github.com/veripublica/paginaverto.git"
 homepage.workspace = true
-publish.workspace = true
+# Not on crates.io: its consumer is npm, as @veripublica/paginaverto-wasm,
+# built by wasm-pack (publish-npm.yml), as kepubverto-wasm is.
+publish = false
 
 # A thin JS boundary over paginaverto's public API; no reading logic of its own.
 # Text layers only: OCR is not built for the browser (no models to ship yet).

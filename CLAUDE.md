@@ -22,7 +22,8 @@ first consumer: it builds EPUBs from paginaverto's output.
   Questions go by note. Write our own code.
 - `Cargo.lock` matches epublift's versions package for package. Do not run a
   plain `cargo update`; engines are pinned with `=` in the workspace.
-- Library only, distributed as a git tag (`publish = false`).
+- Library on crates.io (`paginaverto`, `paginaverto-ocr`) and the browser
+  binding on npm (`@veripublica/paginaverto-wasm`), from 0.1.2 on.
 
 ## Layout
 
@@ -50,8 +51,10 @@ cargo +1.97 check --workspace --locked --features paginaverto/ocr
 
 ## Releasing
 
-Library only, as a git tag, with a GitHub Release page; no crates.io, no
-binaries (0.1.x). **Commit, tag and push only with Baris's explicit yes,
+A `v*` tag releases everything: the GitHub Release page (`release.yml`),
+crates.io (`publish-crate.yml`: paginaverto-ocr, then paginaverto) and npm
+(`publish-npm.yml`: @veripublica/paginaverto-wasm). No binaries until there
+is a CLI. A registry version can never be reused. **Commit, tag and push only with Baris's explicit yes,
 each time, asked right before the tag** — an earlier yes to the work does
 not cover the release. The family's model (kepubverto, epubsana): scripts do
 the work, the agents run them, the main session reviews, asks, tags, pushes.
@@ -67,19 +70,34 @@ the work, the agents run them, the main session reviews, asks, tags, pushes.
    attribution).
 3. **`release-prep` agent** runs `scripts/preflight.sh X.Y.Z`: version and
    lock, notes present and `[Unreleased]` empty, clean tree, tag free, not
-   behind origin, no attribution since the last tag, every CI gate (fmt,
-   clippy ×3, tests ×2, doc, no ocrs/rten by default, wasm-pack, audit,
-   MSRV). Quote its last line (`READY` / `NOT READY`).
+   behind origin, no attribution since the last tag, licence copies match,
+   the version absent from crates.io and npm, every CI gate (fmt, clippy ×3,
+   tests ×2, doc, no ocrs/rten by default, wasm-pack, `cargo publish
+   --workspace --dry-run`, no local-only file in the packages, audit, MSRV).
+   Quote its last line (`READY` / `NOT READY`).
 4. **Ask Baris**, with the version, the notes, and the preflight verdict.
 5. On his yes: `git tag -a vX.Y.Z -m "…"` and `git push origin main vX.Y.Z`
    (main and tag together).
-6. **`release-verify` agent** runs `scripts/wait-runs.sh vX.Y.Z` (three
-   runs: CI, Pages, Release) then `scripts/release-verify.sh X.Y.Z` (tag on
-   origin, release page published with the CHANGELOG section and the
-   `Cargo.toml` line, the tag resolves as a dependency, web page up). Quote
-   both verdicts.
+6. **`release-verify` agent** runs `scripts/wait-runs.sh vX.Y.Z` (five
+   runs: CI, Pages, Release, crates.io, npm) then
+   `scripts/release-verify.sh X.Y.Z` (tag on origin, release page with the
+   CHANGELOG section and registry links, both crates served with their
+   licences and no local-only file, the npm tarball with both licences, the
+   `.d.ts` and the `.wasm`, npm `latest`, the tag as a git dependency, web
+   page up). Quote both verdicts. Don't rename the two publish workflows:
+   the trust links name them.
 7. **After:** note to `epublift/inbox/` (version, what changed, the line to
    depend on), copy to conventions when the release matters to the family.
+
+**The first registry release (0.1.2) is published by hand, by Baris**, from a
+clean clone of the tag outside iCloud, before the tag is pushed (the publish
+workflows then find the version there and skip). Then he links trusted
+publishing: crates.io → each of the two crates → Settings → Trusted
+Publishing (repo `veripublica/paginaverto`, workflow `publish-crate.yml`);
+npmjs.com → the package → Settings → Trusted Publisher (org `veripublica`,
+repo `paginaverto`, workflow `publish-npm.yml`, environment empty). Check
+the crates.io link with `publish-crate.yml`'s `verify_only`. Claude never
+enters a token.
 
 `release.yml` writes the release page from the tag's CHANGELOG section and
 fails if there is none. `workflow_dispatch` with a `tag` input creates or

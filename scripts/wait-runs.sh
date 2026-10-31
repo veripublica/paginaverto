@@ -5,13 +5,13 @@
 #
 # Usage: scripts/wait-runs.sh <commit> [expected-runs] [timeout-seconds]
 #
-# A release push sends main and the tag together, so one commit carries three
-# runs: CI and Pages (main) and Release (the tag). A plain push to main
-# expects 2.
+# A release push sends main and the tag together, so one commit carries five
+# runs: CI and Pages (main), and Release, crates.io and npm (the tag). A plain
+# push to main expects 2.
 
 set -euo pipefail
 SHA=$(git rev-parse "${1:?usage: scripts/wait-runs.sh <commit> [expected-runs] [timeout-seconds]}")
-N="${2:-3}"
+N="${2:-5}"
 LIMIT="${3:-1500}"
 REPO=veripublica/paginaverto
 

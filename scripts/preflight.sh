@@ -48,7 +48,12 @@ NOTES=$(awk -v v="$V" '$0 ~ "^## \\[" v "\\]"{f=1;next} f&&/^## \[/{exit} f&&NF{
 awk '/^## \[Unreleased\]/{f=1;next} f&&/^## \[/{exit} f&&NF{n++} END{exit n?1:0}' CHANGELOG.md \
   && ok "[Unreleased] is empty (nothing left out of $V)" \
   || bad "[Unreleased] still has entries: move them into [$V]"
-grep -q '^publish = false' Cargo.toml && ok "publish = false (git tag only)" || bad "publish is not false"
+# The licence files each package ships are copies of the repository's.
+for c in paginaverto paginaverto-ocr paginaverto-wasm; do
+  for f in LICENSE LICENSE-COMMERCIAL.md; do
+    cmp -s "$f" "crates/$c/$f" && ok "crates/$c/$f matches $f" || bad "crates/$c/$f differs from $f (re-copy it)"
+  done
+done
 
 # ------------------------------------------------------------------ tree
 if [ -z "$(git status --porcelain)" ]; then ok "working tree clean"
@@ -71,6 +76,15 @@ if git log --format='%an %ae%n%B' ${LAST:+$LAST..}HEAD | sed 's/CLAUDE\.md//g' |
 else
   ok "no attribution in commits since ${LAST:-the root}"
 fi
+
+# ------------------------------------------------------------------ registries
+for c in paginaverto-ocr paginaverto; do
+  curl -sf -A "paginaverto-release (github.com/veripublica/paginaverto)" \
+    "https://crates.io/api/v1/crates/$c/$V" >/dev/null \
+    && bad "crates.io already has $c $V" || ok "crates.io does not have $c $V"
+done
+curl -sf "https://registry.npmjs.org/@veripublica%2fpaginaverto-wasm/$V" >/dev/null \
+  && bad "npm already has $V" || ok "npm does not have $V"
 
 # ------------------------------------------------------------------ CI gates
 check "cargo fmt --all --check" cargo fmt --all --check
@@ -98,6 +112,17 @@ if command -v wasm-pack >/dev/null; then
   rm -rf "${TMPDIR:-/tmp}/paginaverto-preflight-pkg"
 else
   skip "wasm-pack not installed (pages.yml builds it)"
+fi
+# What crates.io will receive, built from the packaged files alone (both
+# crates, in order, against each other). Needs a clean tree.
+if [ -n "$(git status --porcelain)" ]; then
+  skip "cargo publish --dry-run: needs a clean tree (see above)"
+else
+  check "cargo publish --workspace --dry-run (package + verify)" cargo publish --workspace --dry-run --locked
+  PKG=$(cargo package --workspace --list --locked 2>/dev/null)
+  STRAY=$(grep -E '(^|/)CLAUDE\.md$|^scripts/|(^|/)[^/]* [0-9]+(\.[A-Za-z0-9]+)?$' <<< "$PKG" || true)
+  [ -z "$STRAY" ] && ok "packages hold no local-only file or conflict copy" \
+    || { bad "stray files would ship"; printf '%s\n' "$STRAY" | sed 's/^/        /'; }
 fi
 if command -v cargo-audit >/dev/null; then
   check "cargo audit (advisory database fetched now)" cargo audit --file Cargo.lock
