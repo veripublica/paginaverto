@@ -16,3 +16,5 @@
   correction. Model names, URL and SHA-256 exported.
 - Everything reproduces epublift cli-v4.5.1's PDF import, quirks included
   (marked `PARITY:` in the code).
+- README: what 0.1.0 does, how to use it and its OCR models, accuracy and
+  parity, the known limits kept on purpose.

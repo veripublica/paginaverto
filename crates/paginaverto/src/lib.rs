@@ -20,6 +20,8 @@
 //! # Ok::<(), paginaverto::Error>(())
 //! ```
 
+#![warn(missing_docs)]
+
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -60,7 +62,9 @@ pub enum Ocr {
     /// `text-detection.rten` and `text-recognition.rten`). paginaverto never
     /// downloads them; the caller does. Needs the `ocr` feature.
     Models {
+        /// The bytes of `text-detection.rten`.
         detection: Vec<u8>,
+        /// The bytes of `text-recognition.rten`.
         recognition: Vec<u8>,
     },
 }
@@ -93,7 +97,11 @@ pub struct Book {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct Chapter {
+    /// The heading that starts the chapter. `None` for the content before
+    /// the first heading.
     pub title: Option<String>,
+    /// Paragraphs and figures, in reading order. A page's figures come after
+    /// its text.
     pub blocks: Vec<Block>,
 }
 
@@ -101,7 +109,9 @@ pub struct Chapter {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Block {
+    /// A paragraph's text, whitespace collapsed to single spaces.
     Paragraph(String),
+    /// An image.
     Figure(Figure),
 }
 
@@ -110,6 +120,7 @@ pub enum Block {
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct Figure {
+    /// The image file's bytes.
     pub data: Vec<u8>,
     /// `image/jpeg` or `image/png`.
     pub media_type: &'static str,

@@ -8,6 +8,8 @@
 //! models are not part of this crate; the caller supplies their bytes (see
 //! [`MODELS`]).
 
+#![warn(missing_docs)]
+
 use std::fmt;
 
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
@@ -47,6 +49,7 @@ pub const MODELS: [ModelFile; 2] = [
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Line {
+    /// The line's text, as ocrs gives it.
     pub text: String,
     /// Where the line sits on the page image, in pixels. Always `None` in
     /// 0.1.0; filled from 0.2.0 on.
@@ -56,9 +59,13 @@ pub struct Line {
 /// An axis-aligned box in image pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
+    /// Left edge.
     pub x: f32,
+    /// Top edge.
     pub y: f32,
+    /// Width.
     pub width: f32,
+    /// Height.
     pub height: f32,
 }
 

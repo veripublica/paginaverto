@@ -44,6 +44,29 @@ cargo test --workspace --locked && cargo test --workspace --locked --features pa
 cargo +1.97 check --workspace --locked --features paginaverto/ocr
 ```
 
+## Releasing
+
+Library only, as a git tag; no crates.io, no binaries (0.1.x). Commit, tag
+and push only when Baris says so.
+
+1. **Bump:** `version` in `[workspace.package]` and the `paginaverto-ocr`
+   entry in `[workspace.dependencies]` (`=X.Y.Z`), both in `Cargo.toml`;
+   then `cargo check --workspace` so `Cargo.lock` follows. Do not run a
+   plain `cargo update`.
+2. **CHANGELOG.md:** rename `## Unreleased` to `## X.Y.Z — YYYY-MM-DD`.
+3. **Pre-flight:** every command under *Checks*, plus
+   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --features paginaverto/ocr`
+   and the default-build check:
+   `cargo tree -p paginaverto -e normal --locked | grep -E '(ocrs|rten) v'`
+   must print nothing.
+4. **Commit** `Release X.Y.Z`, then an annotated tag `vX.Y.Z`; push `main`
+   and the tag.
+5. **Verify:** the CI run on the tagged commit is green
+   (`gh run list --commit <sha>`), and the tag resolves:
+   `git ls-remote --tags origin vX.Y.Z`.
+6. **Tell epublift** by note (copy to conventions) with the exact
+   `Cargo.toml` line.
+
 ## Data rules
 
 - PDFs on this machine are Baris's personal documents: numbers from them may
