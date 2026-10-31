@@ -5,8 +5,9 @@
 //!
 //! 0.1.0 wraps ocrs 0.13.1 on rten 0.26, unchanged from epublift cli-v4.5.1:
 //! the same illumination correction, the same models, the same text. The
-//! models are not part of this crate; the caller supplies their bytes (see
-//! [`MODELS`]).
+//! models are not part of this crate; the caller supplies their bytes, in
+//! ONNX form ([`ONNX_MODELS`], the files ocrs serves today) or in the older
+//! RTen form ([`MODELS`]). Both carry the same weights and give the same text.
 
 #![warn(missing_docs)]
 
@@ -15,11 +16,11 @@ use std::fmt;
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use rten::Model;
 
-/// Where the ocrs project published its models.
+/// Where the ocrs project publishes its models.
 ///
-/// As of 2026-10-31 this bucket answers 403 for the `.rten` files (it still
-/// serves `.onnx`), so a fresh download fails; the hashes in [`MODELS`] are
-/// of the copies epublift downloaded on 2026-10-26.
+/// Fetch [`ONNX_MODELS`] from here. Since at least 2026-10-31 the bucket
+/// answers 403 for the `.rten` files of [`MODELS`], which only a copy you
+/// already have can provide.
 pub const MODEL_BASE_URL: &str = "https://ocrs-models.s3-accelerate.amazonaws.com";
 
 /// One model file the caller fetches from [`MODEL_BASE_URL`].
@@ -31,9 +32,26 @@ pub struct ModelFile {
     pub sha256: &'static str,
 }
 
-/// The detection model, then the recognition model. CC BY-SA 4.0 (trained on
-/// HierText); whoever redistributes them gives the attribution their license
-/// asks for.
+/// The detection model, then the recognition model, in ONNX form: the files
+/// ocrs serves. CC BY-SA 4.0 (trained on HierText); whoever redistributes them
+/// gives the attribution their license asks for.
+///
+/// On 2026-10-31 they gave byte-identical text to [`MODELS`] on every scan
+/// measured, at the same speed.
+pub const ONNX_MODELS: [ModelFile; 2] = [
+    ModelFile {
+        name: "text-detection.onnx",
+        sha256: "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe",
+    },
+    ModelFile {
+        name: "text-recognition.onnx",
+        sha256: "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5",
+    },
+];
+
+/// The same two models in the RTen form epublift downloaded until 2026-10
+/// (copies of 2026-10-26). No longer served (403); kept so that an existing
+/// cache still checks. Prefer [`ONNX_MODELS`].
 pub const MODELS: [ModelFile; 2] = [
     ModelFile {
         name: "text-detection.rten",
@@ -103,7 +121,8 @@ impl fmt::Debug for Engine {
 }
 
 impl Engine {
-    /// Load the detection and recognition models from their bytes.
+    /// Load the detection and recognition models from their bytes, ONNX or
+    /// RTen (the format is detected from the bytes).
     pub fn new(detection: Vec<u8>, recognition: Vec<u8>) -> Result<Engine, Error> {
         let detection =
             Model::load(detection).map_err(|e| Error::Models(format!("detection: {e}")))?;
@@ -190,6 +209,18 @@ mod tests {
     fn engine_is_send() {
         fn send<T: Send>() {}
         send::<Engine>();
+    }
+
+    #[test]
+    fn model_hashes_are_sha256_hex() {
+        for m in MODELS.iter().chain(&ONNX_MODELS) {
+            assert_eq!(m.sha256.len(), 64, "{}", m.name);
+            assert!(
+                m.sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            );
+        }
     }
 
     #[test]

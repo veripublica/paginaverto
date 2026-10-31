@@ -30,7 +30,7 @@ mod structure;
 mod text;
 
 #[cfg(feature = "ocr")]
-pub use paginaverto_ocr::{MODEL_BASE_URL, MODELS, ModelFile};
+pub use paginaverto_ocr::{MODEL_BASE_URL, MODELS, ModelFile, ONNX_MODELS};
 
 /// Where the PDF comes from.
 #[derive(Debug, Clone, Copy)]

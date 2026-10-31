@@ -11,6 +11,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OCR models in ONNX form,** the files ocrs serves today:
+  `paginaverto::ONNX_MODELS` names them and gives their SHA-256. The `.rten`
+  files (`paginaverto::MODELS`) still load, but the ocrs bucket answers 403
+  for them, so a fresh install could not get them. The format is detected
+  from the bytes.
+  - Measured 2026-10-31 on 18 local PDFs: the text is byte-identical with
+    either form, at the same speed. That covers both scans with readable
+    text, and the scan refused the same way with both.
+
 ## [0.1.1] - 2026-10-31
 
 ### Added

@@ -74,17 +74,18 @@ content language:
 let mut opts = paginaverto::Options::default();
 opts.language = Some("en".into());
 opts.ocr = paginaverto::Ocr::Models {
-    detection: std::fs::read("text-detection.rten")?,
-    recognition: std::fs::read("text-recognition.rten")?,
+    detection: std::fs::read("text-detection.onnx")?,
+    recognition: std::fs::read("text-recognition.onnx")?,
 };
 ```
 
 paginaverto never downloads the models: the caller provides their bytes.
-`paginaverto::MODELS` names the two files and gives their SHA-256; check
-it before loading. **As of 2026-10-31 the ocrs bucket no longer serves the
-`.rten` files** (it answers 403; it still serves `.onnx`), so a copy you
-already have is the only source for now. Moving to the current ocrs models
-is planned for 0.2.0.
+`paginaverto::ONNX_MODELS` names the two files to fetch from
+`paginaverto::MODEL_BASE_URL` and gives their SHA-256; check it before
+loading. The older `.rten` files (`paginaverto::MODELS`) still load, but
+the ocrs bucket no longer serves them (403 since at least 2026-10-31). Both
+forms carry the same models and gave byte-identical text on every scan
+measured.
 
 The default build pulls in neither ocrs nor rten.
 

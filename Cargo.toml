@@ -21,7 +21,9 @@ paginaverto-ocr = { path = "crates/paginaverto-ocr", version = "=0.1.1" }
 # Upgrade only from 0.2.0 on, and measure.
 lopdf = "=0.45.0"
 ocrs = "=0.13.1"
-rten = "=0.26.0"
+# onnx_format: the models ocrs serves today are .onnx (the .rten files answer
+# 403). Model::load detects the format from the bytes.
+rten = { version = "=0.26.0", features = ["onnx_format"] }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 regex = "1.13.1"
 
