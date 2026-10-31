@@ -26,7 +26,7 @@ const book = read(new Uint8Array(await file.arrayBuffer()));
   runs the reader in a worker and starts a new one after a trap.
 - Licence: AGPL-3.0-only OR the veripublica commercial licence (`LICENSE`,
   `LICENSE-COMMERCIAL.md`, both in the package).
-- The demo page (`demo/`) uses family-web's template v7 (family-web v0.7.1);
+- The demo page (`demo/`) uses family-web's template v8 (family-web v0.8.0);
   `tokens.css` and `demo.css` are unedited copies.
 
 Build and serve locally:

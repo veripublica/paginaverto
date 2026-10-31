@@ -11,6 +11,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The web page uses family-web template v8 (family-web v0.8.0): its offline
+  list of family tools now names all six, imagoverto and paginaverto
+  included. No visible change online, where the list already came from
+  family-web.
+
 ## [0.1.3] - 2026-10-31
 
 ### Added
