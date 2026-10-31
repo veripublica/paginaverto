@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-10-31
 
 - Workspace: `paginaverto` (library) and `paginaverto-ocr` (character
   recognition, behind the `ocr` feature).

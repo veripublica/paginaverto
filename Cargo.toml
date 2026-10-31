@@ -3,7 +3,7 @@ members = ["crates/paginaverto", "crates/paginaverto-ocr"]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 # No newer than epublift's (latest stable - 2), its first consumer.
 rust-version = "1.97"
@@ -14,7 +14,7 @@ homepage = "https://github.com/veripublica/paginaverto"
 publish = false
 
 [workspace.dependencies]
-paginaverto-ocr = { path = "crates/paginaverto-ocr", version = "=0.0.0" }
+paginaverto-ocr = { path = "crates/paginaverto-ocr", version = "=0.1.0" }
 # 0.1.0 is a parity release with epublift cli-v4.5.1: the engines are pinned
 # to the exact versions epublift's Cargo.lock resolves, because their
 # behaviour (lopdf's `extract_text` above all) is part of the output.
