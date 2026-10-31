@@ -7,18 +7,17 @@ structure of a document without writing code. Part of the
 [veripublica](https://github.com/veripublica) tools. The name is Latin:
 *pagina*, page, and *verto*, to turn.
 
-**Status:** 0.1.0 is in preparation, as a library only. It is a parity
-release: it does exactly what
-[epublift](https://github.com/ePubLift/epublift)'s PDF import did in
-cli-v4.5.1, so that epublift can move to it. The structured document
-described under [Scope](#scope) comes from 0.2.0 on.
+**Status:** 0.1 is a parity release, on crates.io and npm: it does exactly
+what [epublift](https://github.com/ePubLift/epublift)'s PDF import did in
+cli-v4.5.1, and epublift now builds on it. The structured document described
+under [Scope](#scope) comes from 0.2.0 on.
 
 **In your browser:** <https://veripublica.github.io/paginaverto/> reads a
 PDF's text and chapters without installing anything; the file never leaves
 the page. It reads PDFs with a text layer; scans need OCR, which the browser
 page does not have yet.
 
-## What 0.1.0 does
+## What 0.1 does
 
 It reads a PDF into a book: chapters, each with an optional title and its
 paragraphs and figures in reading order. It handles three kinds of PDF:
@@ -107,7 +106,7 @@ The default build pulls in neither ocrs nor rten.
   overlap for a born-digital book, about 92% word accuracy for OCR of a
   clean prose scan.
 
-## Known limits of 0.1.0
+## Known limits of 0.1
 
 They are kept on purpose: changing them would change the output, and then
 parity with epublift would prove nothing. Each one is fixed from 0.2.0 on,
@@ -134,7 +133,7 @@ of the output. They move from 0.2.0 on.
 
 ## Scope
 
-What paginaverto is for, beyond 0.1.0:
+What paginaverto is for, beyond 0.1:
 
 - **Input:** PDF files and page images. Text comes from a PDF's text layer
   where one exists, and from character recognition (OCR) where none does.

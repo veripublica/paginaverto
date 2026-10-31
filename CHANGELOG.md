@@ -11,6 +11,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-31
+
 ### Added
 
 - **On crates.io and npm.** `paginaverto` and `paginaverto-ocr` are on
