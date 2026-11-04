@@ -101,7 +101,8 @@ The default build pulls in neither ocrs nor rten.
   of them scans, one refused): the chapters, paragraphs and figures of the
   17 that convert are byte-identical to epublift cli-v4.5.1's, and the
   refused one gets the same error. That measures faithfulness to epublift,
-  not accuracy.
+  not accuracy. 0.1.4 breaks parity once, on purpose: figures stored as
+  `/Filter [/FlateDecode /DCTDecode]` were not real JPEGs, and now are.
 - epublift's earlier measurements, on one book each: about 99.8% word
   overlap for a born-digital book, about 92% word accuracy for OCR of a
   clean prose scan.

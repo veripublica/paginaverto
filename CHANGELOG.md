@@ -11,6 +11,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Figures stored as `/Filter [/FlateDecode /DCTDecode]` are real JPEGs now.**
+  The bytes came out still deflated under an `image/jpeg` label, so an EPUB
+  built from them was invalid. Every filter in front of `DCTDecode` is now
+  undone, each with its own `/DecodeParms`. If that fails or does not end in a
+  JPEG, there is no figure. Scans read through OCR take the same path.
+
+  This is the one deliberate break of parity with epublift cli-v4.5.1 in the
+  0.1 series. Compared with 0.1.3 on 18 local PDFs, 11 figures in two books
+  changed, and all 11 are now JPEGs. Chapters, paragraphs, every other figure
+  and the one refusal are the same.
+
 ### Changed
 
 - The web page uses family-web template v8 (family-web v0.8.0): its offline

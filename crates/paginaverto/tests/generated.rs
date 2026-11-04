@@ -292,6 +292,119 @@ fn scan_checks_come_in_order() {
     ));
 }
 
+/// A tiny JPEG, with zeros after its end so that it compresses.
+fn jpeg() -> Vec<u8> {
+    let img = image::GrayImage::from_pixel(8, 8, image::Luma([128]));
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    out.resize(out.len() + 4096, 0);
+    out
+}
+
+fn deflate(bytes: &[u8]) -> Vec<u8> {
+    let mut s = Stream::new(dictionary! {}, bytes.to_vec());
+    s.compress().unwrap();
+    assert!(s.dict.has(b"Filter"), "the fixture must compress");
+    s.content
+}
+
+fn names(names: &[&str]) -> Object {
+    Object::Array(names.iter().map(|&n| n.into()).collect())
+}
+
+/// The figures read from a text page that shows an image stored as `stored`
+/// under `filter`.
+fn figures_of(filter: Object, parms: Option<Object>, stored: Vec<u8>) -> Vec<Vec<u8>> {
+    let mut dict = dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Image",
+        "Width" => 8,
+        "Height" => 8,
+        "ColorSpace" => "DeviceGray",
+        "BitsPerComponent" => 8,
+        "Filter" => filter,
+    };
+    if let Some(parms) = parms {
+        dict.set("DecodeParms", parms);
+    }
+    // Long enough to count as a text layer.
+    let text = "A sentence of ordinary words. ".repeat(4);
+    let bytes = pdf(
+        simple_font,
+        Some(Stream::new(dict, stored)),
+        &[vec![
+            op("BT", vec![]),
+            op("Tf", vec!["F1".into(), 12.into()]),
+            op("Td", vec![72.into(), 700.into()]),
+            op("Tj", vec![Object::string_literal(text)]),
+            op("ET", vec![]),
+        ]],
+    );
+    let book = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+    book.chapters
+        .iter()
+        .flat_map(|c| &c.blocks)
+        .filter_map(|b| match b {
+            Block::Figure(f) => {
+                assert_eq!(f.media_type, "image/jpeg");
+                Some(f.data.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn jpeg_alone_stays_as_stored() {
+    let j = jpeg();
+    assert_eq!(figures_of("DCTDecode".into(), None, j.clone()), vec![j]);
+}
+
+#[test]
+fn flate_in_front_of_jpeg_is_undone() {
+    let j = jpeg();
+    let chain = names(&["FlateDecode", "DCTDecode"]);
+    assert_eq!(figures_of(chain, None, deflate(&j)), vec![j]);
+}
+
+#[test]
+fn two_filters_in_front_of_jpeg_are_undone() {
+    let j = jpeg();
+    let mut stored: Vec<u8> = deflate(&j)
+        .iter()
+        .flat_map(|b| format!("{b:02x}").into_bytes())
+        .collect();
+    stored.push(b'>');
+    let chain = names(&["ASCIIHexDecode", "FlateDecode", "DCTDecode"]);
+    assert_eq!(figures_of(chain, None, stored), vec![j]);
+}
+
+#[test]
+fn null_parms_entries_in_a_jpeg_chain() {
+    let j = jpeg();
+    let chain = names(&["FlateDecode", "DCTDecode"]);
+    let parms = Object::Array(vec![Object::Null, Object::Null]);
+    assert_eq!(figures_of(chain, Some(parms), deflate(&j)), vec![j]);
+}
+
+#[test]
+fn a_chain_that_does_not_end_in_a_jpeg_gives_no_figure() {
+    let chain = names(&["FlateDecode", "DCTDecode"]);
+    // Inflates cleanly, to bytes that are no JPEG.
+    let not_jpeg = deflate(&[7u8; 4096]);
+    assert!(figures_of(chain.clone(), None, not_jpeg).is_empty());
+    // Does not inflate at all.
+    assert!(figures_of(chain, None, vec![1, 2, 3, 4]).is_empty());
+    // A filter nothing here can undo.
+    let chain = names(&["JBIG2Decode", "DCTDecode"]);
+    assert!(figures_of(chain, None, jpeg()).is_empty());
+}
+
 #[test]
 fn not_a_pdf_is_open_error() {
     let err = read(Input::Bytes(b"this is not a PDF"), &Options::default()).unwrap_err();

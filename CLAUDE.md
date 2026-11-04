@@ -17,7 +17,9 @@ first consumer: it builds EPUBs from paginaverto's output.
 - Same output as epublift cli-v4.5.1's PDF import (`src/pdf/` @ db50c3a):
   chapters, paragraphs and figures byte for byte, same refusals.
 - **Fix nothing in 0.1.0**, not even the obvious faults; they are listed in
-  the plan and fixed from 0.2.0, each measured.
+  the plan and fixed from 0.2.0, each measured. One exception, Baris's yes on
+  2026-11-04: 0.1.4 undoes the filters in front of `DCTDecode`, because those
+  figures made invalid EPUBs.
 - epublift is **read only** (`/Users/baris/Documents/Projects/epublift`).
   Questions go by note. Write our own code.
 - `Cargo.lock` matches epublift's versions package for package. Do not run a

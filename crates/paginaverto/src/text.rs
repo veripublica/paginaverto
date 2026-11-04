@@ -935,16 +935,45 @@ fn figure(doc: &Document, stream: &Stream) -> Option<Figure> {
         _ => None,
     });
     match filter {
-        // PARITY: the stream's bytes as stored, even when a filter before
-        // DCTDecode would need undoing first.
         Some(b"DCTDecode") => Some(Figure {
-            data: stream.content.clone(),
+            data: jpeg_bytes(doc, stream)?,
             media_type: "image/jpeg",
             ext: "jpg",
         }),
         Some(b"FlateDecode") | Some(b"LZWDecode") | None => raw_to_png(doc, stream),
         _ => None,
     }
+}
+
+/// The JPEG inside a stream whose last filter is DCTDecode. With DCTDecode
+/// alone, the stream's bytes as stored. With filters in front of it, those are
+/// undone one by one, each with its own /DecodeParms entry; if that fails or
+/// does not end in a JPEG, none: wrong bytes under a JPEG label are worse than
+/// no figure.
+fn jpeg_bytes(doc: &Document, stream: &Stream) -> Option<Vec<u8>> {
+    let chain = match stream.dict.get(b"Filter").ok()? {
+        Object::Array(chain) if chain.len() > 1 => chain,
+        _ => return Some(stream.content.clone()),
+    };
+    let parms = stream
+        .dict
+        .get(b"DecodeParms")
+        .ok()
+        .and_then(|o| o.as_array().ok());
+    let mut data = stream.content.clone();
+    for (i, filter) in chain[..chain.len() - 1].iter().enumerate() {
+        let mut dict = Dictionary::new();
+        dict.set("Filter", filter.clone());
+        if let Some(p) = parms
+            .and_then(|p| p.get(i))
+            .and_then(|p| deref(doc, p))
+            .and_then(|p| p.as_dict().ok())
+        {
+            dict.set("DecodeParms", p.clone());
+        }
+        data = Stream::new(dict, data).decompressed_content().ok()?;
+    }
+    data.starts_with(&[0xff, 0xd8]).then_some(data)
 }
 
 /// Re-encode a raw 8-bit DeviceGray/DeviceRGB image as PNG.
