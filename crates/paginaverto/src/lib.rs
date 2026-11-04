@@ -286,6 +286,7 @@ fn with_causes(e: &dyn std::error::Error) -> String {
 /// decoded and fewer than 45% of them are letters, the fonts did not decode.
 fn fails_quality_gate(chapters: &[Chapter]) -> bool {
     let (mut nonspace, mut letters) = (0usize, 0usize);
+    let titles = chapters.iter().filter_map(|c| c.title.as_ref());
     let paragraphs = chapters
         .iter()
         .flat_map(|c| &c.blocks)
@@ -293,7 +294,7 @@ fn fails_quality_gate(chapters: &[Chapter]) -> bool {
             Block::Paragraph(p) => Some(p),
             Block::Figure(_) => None,
         });
-    for ch in paragraphs.flat_map(|p| p.chars()) {
+    for ch in titles.chain(paragraphs).flat_map(|p| p.chars()) {
         if !ch.is_whitespace() {
             nonspace += 1;
             if ch.is_alphabetic() {
@@ -301,7 +302,6 @@ fn fails_quality_gate(chapters: &[Chapter]) -> bool {
             }
         }
     }
-    // PARITY: chapter titles are not counted.
     nonspace >= 50 && (letters as f32) < nonspace as f32 * 0.45
 }
 
@@ -326,8 +326,8 @@ fn scan_pages(doc: &lopdf::Document, opts: &Options) -> Result<Vec<text::Page>, 
         .get_pages()
         .into_values()
         .map(|id| {
-            // PARITY: a page whose image is missing, undecodable, or fails
-            // recognition becomes an empty page, silently.
+            // A page whose image is missing, undecodable, or fails recognition
+            // becomes an empty page. The document format will report it.
             let lines = text::scan_image(doc, id)
                 .and_then(|fig| engine.recognise(&fig.data).ok())
                 .unwrap_or_default();

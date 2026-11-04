@@ -333,6 +333,60 @@ fn five_lines(show: impl Fn(&mut Vec<Operation>)) -> Vec<Operation> {
 }
 
 #[test]
+fn an_image_inherited_from_the_page_tree_counts_as_a_full_page() {
+    // Text over a page-sized image found only in the parent's /Resources: a
+    // scan with a text layer, so its image is the page and no figure.
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let font = simple_font(&mut doc).unwrap();
+    let font = doc.add_object(font);
+    let image = doc.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 800,
+            "Height" => 600,
+            "ColorSpace" => "DeviceGray",
+            "BitsPerComponent" => 8,
+        },
+        vec![200u8; 480_000],
+    ));
+    let ops = five_lines(|ops| {
+        ops.push(op(
+            "Tj",
+            vec![Object::string_literal("Extraordinary words here")],
+        ));
+    });
+    let content = Content { operations: ops }.encode().unwrap();
+    let c = doc.add_object(Stream::new(dictionary! {}, content));
+    let page = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        "Contents" => c,
+    });
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page.into()],
+            "Count" => 1,
+            "Resources" => dictionary! {
+                "Font" => dictionary! { "F1" => font },
+                "XObject" => dictionary! { "Im1" => image },
+            },
+        }),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let book = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+    let blocks = book.chapters.iter().flat_map(|c| &c.blocks);
+    assert!(!blocks.into_iter().any(|b| matches!(b, Block::Figure(_))));
+}
+
+#[test]
 fn large_tj_adjustment_is_a_word_space() {
     let ops = five_lines(|ops| {
         let parts = vec![

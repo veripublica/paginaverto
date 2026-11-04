@@ -1,8 +1,5 @@
 //! From page text to chapters: drop running heads, page numbers and
 //! line-break hyphens, then find the headings that start chapters.
-//!
-//! Parity note (0.1.0): reproduces epublift cli-v4.5.1's
-//! `src/pdf/structure.rs`. Quirks to fix later are marked `PARITY:`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,7 +8,7 @@ use regex::Regex;
 use crate::text::{self, Page};
 use crate::{Block, Chapter, Figure};
 
-/// A heading starts a chapter only when at least this many bytes of body
+/// A heading starts a chapter only when at least this many characters of body
 /// text follow it before the next heading.
 const MIN_CHAPTER_BODY: usize = 400;
 
@@ -69,12 +66,11 @@ pub(crate) fn chapters(pages: &[Page]) -> Vec<Chapter> {
             Item::Body(p) => Block::Paragraph(p.clone()),
             Item::Figure(f) => Block::Figure(f.clone()),
             Item::Heading(h) => {
-                // PARITY: counts bytes, not characters.
                 let body: usize = items[i + 1..]
                     .iter()
                     .take_while(|it| !matches!(it, Item::Heading(_)))
                     .map(|it| match it {
-                        Item::Body(p) => p.len(),
+                        Item::Body(p) => p.chars().count(),
                         _ => 0,
                     })
                     .sum();
@@ -302,6 +298,14 @@ mod tests {
         }
         let text = body(&chapters(&pages));
         assert!(!text.contains("A SHORT CHAPTER"), "{text}");
+    }
+
+    #[test]
+    fn chapter_body_counts_characters_not_bytes() {
+        // 300 characters, 600 bytes: too little body to start a chapter.
+        let b = "ş".repeat(300);
+        let ch = chapters(&[page(&["BİRİNCİ BÖLÜM", &b])]);
+        assert!(ch.iter().all(|c| c.title.is_none()));
     }
 
     #[test]

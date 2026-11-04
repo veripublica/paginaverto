@@ -1,9 +1,5 @@
 //! The text layer: classify the document, then pull each page's text with
 //! font size and position, and its images.
-//!
-//! Parity note (0.1.0): every rule here reproduces epublift cli-v4.5.1's
-//! `src/pdf/extract.rs`, quirks included. The ones to fix later are marked
-//! `PARITY:`; do not change them before 0.2.0, and measure when you do.
 
 use std::collections::HashMap;
 
@@ -97,16 +93,8 @@ const FULL_PAGE_PIXELS: i64 = 400_000;
 
 /// Does the page carry an image of about a page's worth of pixels?
 fn has_full_page_image(doc: &Document, page_id: ObjectId) -> bool {
-    // PARITY: reads only the page's own /Resources, not one inherited from
-    // the page tree (unlike `resources`).
-    let own = doc
-        .get_object(page_id)
-        .ok()
-        .and_then(|o| o.as_dict().ok())
-        .and_then(|d| d.get(b"Resources").ok())
-        .and_then(|o| deref(doc, o))
-        .and_then(|o| o.as_dict().ok());
-    own.is_some_and(|res| images(doc, res).any(|s| pixel_area(s) > FULL_PAGE_PIXELS))
+    resources(doc, page_id)
+        .is_some_and(|res| images(doc, res).any(|s| pixel_area(s) > FULL_PAGE_PIXELS))
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +226,17 @@ fn lopdf_blocks(doc: &Document, page_id: ObjectId, page_num: u32) -> Vec<String>
         .collect()
 }
 
-/// Collapse every run of whitespace to one space and trim.
+/// Collapse every run of whitespace to one space and trim, and drop Unicode
+/// noncharacters: a symbol font's `/ToUnicode` can map glyphs to U+FFFE or
+/// U+FFFF when it has no character for them, and they are no text.
 pub(crate) fn squash(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let kept: String = s.chars().filter(|&c| !is_noncharacter(c)).collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_noncharacter(c: char) -> bool {
+    let c = u32::from(c);
+    (0xFDD0..=0xFDEF).contains(&c) || c & 0xFFFE == 0xFFFE
 }
 
 /// Letters only, lowercased, words single-spaced: for matching text across
@@ -724,7 +720,7 @@ fn decode(font: Option<&Font>, bytes: &[u8]) -> Shown {
             let n = (*code_len).max(1);
             let mut text = String::new();
             let mut adv = 0.0_f32;
-            // PARITY: a trailing partial code is dropped.
+            // A trailing partial code is malformed, and is dropped.
             for chunk in bytes.chunks_exact(n) {
                 let code = chunk.iter().fold(0u32, |c, &b| (c << 8) | u32::from(b));
                 if let Some(s) = map.get(&code) {
@@ -1296,6 +1292,12 @@ endcmap";
         assert_eq!(letters_only("ÇAĞ"), "çağ");
         assert_eq!(letters_only("KAPI"), letters_only("Kapı"));
         assert_eq!(letters_only("BİRİNCİ"), letters_only("Birinci"));
+    }
+
+    #[test]
+    fn squash_drops_noncharacters() {
+        assert_eq!(squash("a\u{FFFE}b \u{FFFF}  c\u{FDD0}"), "ab c");
+        assert_eq!(squash("Öğrenci \u{1F600}"), "Öğrenci \u{1F600}");
     }
 
     #[test]

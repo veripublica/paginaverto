@@ -40,6 +40,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     capitals does, and a paragraph continues across a page.
   - Running heads: one that names a short chapter is caught, and the Turkish
     capitals (İ, Ç, Ş, …) now match when heads and headings are compared.
+  - The smaller inherited faults are gone: a full-page image in the page tree's
+    `/Resources` counts, a chapter's minimum body is counted in characters, the
+    quality gate counts chapter titles, and text never holds Unicode
+    noncharacters such as U+FFFE.
 
   On one Turkish book with a reference, the words matching it rose from 95.80%
   to 98.85%, and words wrongly split fell from 1,222 to 16.

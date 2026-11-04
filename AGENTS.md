@@ -139,22 +139,17 @@ forms carry the same models and gave byte-identical text on every scan measured.
 
 ## Limits of 0.1
 
-These are kept on purpose: changing them would change the output, and then
-parity with epublift would prove nothing. Each is fixed from 0.2.0 on, and
-measured. In the code they are marked `PARITY:`.
+Being fixed on `main` for 0.2.0, each measured; what is still true of `main`
+stays here.
 
 - OCR reads ASCII only. The ocrs 0.13.1 model is trained on ASCII text, so it
   cannot produce ç ğ ı İ ö ş ü, other accented letters or non-Latin scripts. The
   text-layer path has no such limit.
-- Capitals outside ASCII (İ, Ç, Ş, …) are not lowercased when running heads and
-  headings are matched, so those can be missed in Turkish books.
-- Paragraphs can come out coarse on some born-digital PDFs.
 - Figures are placed after their page's text, not at their exact position.
   JPEG 2000, CCITT, JBIG2 and CMYK images are skipped.
 - A document classified as a scan goes through OCR on every page, and scans yield
   no figures.
 - An OCR failure on one page gives an empty page, silently.
-- `has_full_page_image` does not walk inherited `/Resources`.
 - Tables and equations come out as plain text.
 - A PDF made only of vector drawings cannot be read: it has no text layer and no
   image to recognise.
