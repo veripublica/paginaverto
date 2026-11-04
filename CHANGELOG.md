@@ -11,6 +11,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-04
+
 ### Fixed
 
 - **Figures stored as `/Filter [/FlateDecode /DCTDecode]` are real JPEGs now.**
