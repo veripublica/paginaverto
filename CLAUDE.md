@@ -107,48 +107,7 @@ refreshes the page of an existing tag (notes from main's CHANGELOG).
   be reported, their text never (not in notes, issues, tests, fixtures,
   commits). Public fixtures are generated from known text or public domain.
 
-## Family notes — cross-project channel
+## Family notes
 
-`/Users/baris/Documents/Projects/veripublica/` (no git, never published) is
-where the family's sessions leave each other notes. Rules: its `PROTOCOL.md`.
-
-- **At session start:** a hook prints how many notes wait in
-  `veripublica/paginaverto/inbox/`. Mention the count; **do not read them
-  until Baris asks.**
-- **Sending:** copy `veripublica/TEMPLATE.md` to
-  `veripublica/<recipient>/inbox/YYYY-MM-DD_paginaverto_<recipient>_<slug>.md`.
-  First paragraph = what you need from them. Only ever add files to another
-  project's inbox.
-- **Done with a note** (answered, acted on, read-if-fyi, or Baris says so):
-  move it to `veripublica/paginaverto/archive-inbox/`, unchanged. Never
-  delete.
-- **Keep this file under ~2,000 words** (R13): what is true now. History goes
-  to `veripublica/paginaverto/HISTORY.md`.
-- **Never credit Claude, Claude Code or Anthropic on GitHub** — not in
-  commits (no `Co-Authored-By` trailer), PR or issue bodies ("Generated with
-  Claude Code"), release notes, code or docs. Check every commit message and
-  PR body before it goes out.
-- **Releases:** the project's release checklist (its own commands) lives in
-  this file's "Releasing" section or a file it points to. Use the
-  `release-prep` agent for the pre-commit checks and `release-verify` after the
-  tag is pushed. Commit, tag and push stay in the main session, with Baris's
-  approval.
-- **Never write into another project's repository.** Public issues stay the
-  decision record; notes carry the reasoning.
-- Files this project wants kept but not in its repo go in
-  `veripublica/paginaverto/`.
-- **Before naming a new long option,** check `veripublica/NAMES.md`. If the
-  name is not there, claim it by note to `conventions/inbox/` before writing
-  the code (R14).
-- **Drafts and working files** (a comment before posting, a script, an
-  intermediate result) go in `veripublica/paginaverto/scratchpad/`, not
-  the harness's temporary directory. Tidy it yourself; deleting there is fine.
-  **Bulk or generated data** (extracted corpora, build outputs, many files a
-  long run reads or writes) goes to an unsynced path such as the harness's
-  temporary directory, never under `veripublica/` (iCloud): real copies, not
-  symlinks, deleted after the run; only the numbers come back (R1).
-- **Long jobs use every core but two;** nothing long runs single-threaded (R1).
-- **Public posts** (MobileRead, Bluesky, …): read `veripublica/POSTING.md` and
-  `veripublica/platforms/<platform>.md` before writing one; save it in
-  `veripublica/paginaverto/<platform>_posts/` before it goes out. A lesson
-  learned on a post goes to `conventions/inbox/`.
+@/Users/baris/Documents/Projects/veripublica/FAMILY.md
+Your folder: `veripublica/paginaverto/`.

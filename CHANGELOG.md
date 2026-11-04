@@ -30,6 +30,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   list of family tools now names all six, imagoverto and paginaverto
   included. No visible change online, where the list already came from
   family-web.
+- `README.md` is now a short introduction. The API, limits, measurements and
+  layout moved to the new `AGENTS.md`.
 
 ## [0.1.3] - 2026-10-31
 
