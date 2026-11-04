@@ -1,0 +1,15 @@
+# Measures the OCR path on known text. Not part of the workspace or any package:
+# it renders pages with a font you name, and needs the OCR models.
+[package]
+name = "ocr-accuracy"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+paginaverto = { path = "../../crates/paginaverto", features = ["ocr"] }
+ab_glyph = "0.2"
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+lopdf = "=0.45.0"

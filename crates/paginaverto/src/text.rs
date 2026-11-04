@@ -1064,6 +1064,11 @@ fn figures(doc: &Document, page_id: ObjectId) -> Vec<Figure> {
 /// page is one big image. The first of equal largest wins.
 #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
 pub(crate) fn scan_image(doc: &Document, page_id: ObjectId) -> Option<Figure> {
+    figure(doc, largest_image(doc, page_id)?)
+}
+
+/// The page's largest image; the first of equal largest wins.
+fn largest_image(doc: &Document, page_id: ObjectId) -> Option<&Stream> {
     let res = resources(doc, page_id)?;
     let mut best: Option<(&Stream, i64)> = None;
     for s in images(doc, res) {
@@ -1072,19 +1077,44 @@ pub(crate) fn scan_image(doc: &Document, page_id: ObjectId) -> Option<Figure> {
             best = Some((s, area));
         }
     }
-    figure(doc, best?.0)
+    Some(best?.0)
+}
+
+/// The formats of a scan's page images, if every one of them is in a format
+/// this build cannot decode; otherwise none. A page without an image does not
+/// count either way.
+pub(crate) fn undecodable_scan(doc: &Document) -> Option<Vec<String>> {
+    let mut formats: Vec<String> = Vec::new();
+    for id in doc.get_pages().into_values() {
+        let Some(image) = largest_image(doc, id) else {
+            continue;
+        };
+        let name = match last_filter(image) {
+            Some(b"JBIG2Decode") => "JBIG2",
+            Some(b"JPXDecode") => "JPEG 2000",
+            Some(b"CCITTFaxDecode") => "CCITT fax",
+            _ => return None,
+        };
+        if !formats.iter().any(|f| f == name) {
+            formats.push(name.to_string());
+        }
+    }
+    (!formats.is_empty()).then_some(formats)
+}
+
+/// With a filter chain, the last filter names the format.
+fn last_filter(stream: &Stream) -> Option<&[u8]> {
+    stream.dict.get(b"Filter").ok().and_then(|o| match o {
+        Object::Name(n) => Some(n.as_slice()),
+        Object::Array(a) => a.iter().filter_map(|x| x.as_name().ok()).next_back(),
+        _ => None,
+    })
 }
 
 /// An image stream as embeddable bytes: a DCT stream verbatim as JPEG; raw
 /// 8-bit gray or RGB pixels as PNG; anything else none.
 fn figure(doc: &Document, stream: &Stream) -> Option<Figure> {
-    // With a filter chain, the last filter names the format.
-    let filter = stream.dict.get(b"Filter").ok().and_then(|o| match o {
-        Object::Name(n) => Some(n.as_slice()),
-        Object::Array(a) => a.iter().filter_map(|x| x.as_name().ok()).next_back(),
-        _ => None,
-    });
-    match filter {
+    match last_filter(stream) {
         Some(b"DCTDecode") => Some(Figure {
             data: jpeg_bytes(doc, stream)?,
             media_type: "image/jpeg",

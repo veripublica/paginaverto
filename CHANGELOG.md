@@ -11,6 +11,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A public accuracy set:** known English and Turkish text, read back from
+  generated PDFs. The text-layer path runs in CI on nine ways of laying out a
+  line, with a character error rate of 0.00%; 0.1.4 reached 17.96% on some.
+  `tools/ocr-accuracy` measures the OCR path by hand: 1.20% to 5.46% for English
+  and 13.04% to 17.07% for Turkish. The set is small and synthetic, so no language
+  counts as supported on it yet. Details are in `AGENTS.md`.
+- **`Error::UndecodableImages`** names the formats (JBIG2, JPEG 2000, CCITT fax)
+  when every page image of a scan is in one that cannot be decoded yet. Such a
+  PDF used to end in `OcrFoundNothing`, which blamed the images' quality, after
+  the caller had fetched the models. `Error` is `#[non_exhaustive]`, so this is
+  additive; the npm package's `ErrorKind` gains the same name.
+
 ### Changed
 
 - **Better text from PDFs with a text layer.** Parity with epublift cli-v4.5.1

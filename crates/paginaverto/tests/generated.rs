@@ -226,18 +226,24 @@ fn heading_starts_a_chapter_and_running_head_goes() {
 
 /// A page-sized gray image and no text: a scan.
 fn scan() -> Vec<u8> {
+    scan_of(None)
+}
+
+/// A one-page scan whose image claims to be stored under `filter`.
+fn scan_of(filter: Option<&str>) -> Vec<u8> {
     let (w, h) = (800i64, 600i64);
-    let image = Stream::new(
-        dictionary! {
-            "Type" => "XObject",
-            "Subtype" => "Image",
-            "Width" => w,
-            "Height" => h,
-            "ColorSpace" => "DeviceGray",
-            "BitsPerComponent" => 8,
-        },
-        vec![200u8; (w * h) as usize],
-    );
+    let mut dict = dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Image",
+        "Width" => w,
+        "Height" => h,
+        "ColorSpace" => "DeviceGray",
+        "BitsPerComponent" => 8,
+    };
+    if let Some(filter) = filter {
+        dict.set("Filter", filter);
+    }
+    let image = Stream::new(dict, vec![200u8; (w * h) as usize]);
     pdf(
         |_| None,
         Some(image),
@@ -264,6 +270,19 @@ fn scan() -> Vec<u8> {
 fn scan_with_ocr_off_is_refused() {
     let err = read(Input::Bytes(&scan()), &Options::default()).unwrap_err();
     assert_eq!(err, Error::ScanNeedsOcr);
+}
+
+#[test]
+fn undecodable_scan_names_its_format_before_asking_for_ocr() {
+    for (filter, name) in [
+        ("JBIG2Decode", "JBIG2"),
+        ("JPXDecode", "JPEG 2000"),
+        ("CCITTFaxDecode", "CCITT fax"),
+    ] {
+        let err = read(Input::Bytes(&scan_of(Some(filter))), &Options::default()).unwrap_err();
+        assert_eq!(err, Error::UndecodableImages(vec![name.to_string()]));
+        assert!(err.to_string().contains(name), "{err}");
+    }
 }
 
 #[cfg(feature = "ocr")]

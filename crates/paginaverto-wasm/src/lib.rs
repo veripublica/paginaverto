@@ -63,6 +63,7 @@ export type ErrorKind =
   | "ScanNeedsOcr"
   | "LanguageRequired"
   | "Models"
+  | "UndecodableImages"
   | "OcrFoundNothing"
   | "UndecodableFonts"
   | "NoText"
@@ -104,6 +105,7 @@ pub fn kind(e: &Error) -> &'static str {
         Error::ScanNeedsOcr => "ScanNeedsOcr",
         Error::LanguageRequired => "LanguageRequired",
         Error::Models(_) => "Models",
+        Error::UndecodableImages(_) => "UndecodableImages",
         Error::OcrFoundNothing => "OcrFoundNothing",
         Error::UndecodableFonts => "UndecodableFonts",
         Error::NoText => "NoText",
@@ -175,6 +177,7 @@ mod tests {
             Error::ScanNeedsOcr,
             Error::LanguageRequired,
             Error::Models(String::new()),
+            Error::UndecodableImages(Vec::new()),
             Error::OcrFoundNothing,
             Error::UndecodableFonts,
             Error::NoText,

@@ -150,6 +150,10 @@ pub enum Error {
     LanguageRequired,
     /// The OCR models could not be loaded.
     Models(String),
+    /// A scan whose page images are all in formats this build cannot decode;
+    /// OCR could not read them, so it is not tried. The formats' names, in
+    /// the order they were met.
+    UndecodableImages(Vec<String>),
     /// OCR ran and found no readable text.
     OcrFoundNothing,
     /// A text layer is present but no page decoded (fonts it cannot read).
@@ -174,9 +178,14 @@ impl fmt::Display for Error {
                 f.write_str("--language is required for scanned PDFs (e.g. --language tr)")
             }
             Error::Models(e) => write!(f, "could not load the OCR models: {e}"),
+            Error::UndecodableImages(formats) => write!(
+                f,
+                "this scan's page images are in a format that can't be decoded yet: {}",
+                formats.join(", ")
+            ),
             Error::OcrFoundNothing => f.write_str(
                 "OCR found no readable text in this scan — the page images may be \
-                 too low-quality, or in a format we can't decode (e.g. JPEG2000)",
+                 too low-quality",
             ),
             Error::UndecodableFonts => f.write_str(
                 "this PDF has a text layer, but its fonts can't be decoded yet \
@@ -223,7 +232,13 @@ fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
 
     let kind = text::classify(&doc);
     let pages: Vec<text::Page> = match kind {
-        text::Kind::Scan => scan_pages(&doc, opts)?,
+        text::Kind::Scan => {
+            // Before OCR's checks: nobody should fetch models for this.
+            if let Some(formats) = text::undecodable_scan(&doc) {
+                return Err(Error::UndecodableImages(formats));
+            }
+            scan_pages(&doc, opts)?
+        }
         text::Kind::TextLayer => {
             let with_figures = text::is_born_digital(&doc);
             doc.get_pages()

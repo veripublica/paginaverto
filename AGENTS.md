@@ -88,12 +88,14 @@ struct Chapter { title: Option<String>, blocks: Vec<Block> }
 struct Figure { data: Vec<u8>, media_type: &'static str, ext: &'static str }
 #[non_exhaustive] enum Error {
     Open(String), ScanNeedsOcr, LanguageRequired, Models(String),
-    OcrFoundNothing, UndecodableFonts, NoText, QualityGate, Internal(String),
+    UndecodableImages(Vec<String>), OcrFoundNothing, UndecodableFonts, NoText,
+    QualityGate, Internal(String),
 }
 ```
 
-A scan's checks come in this order: scan, then OCR off, then language missing,
-then models.
+A scan's checks come in this order: images no build can decode yet
+(`UndecodableImages`: JBIG2, JPEG 2000, CCITT fax, when every page's image is one
+of them), then OCR off, then language missing, then models.
 
 ```rust
 use paginaverto::{Block, Input, Options, read};
@@ -180,6 +182,28 @@ plain `cargo update`.
 - **0.1.4 against 0.1.3,** 2026-11-04, same 18 PDFs: 11 figures changed, in two
   books (10 of 23, 1 of 9), and all 11 are now JPEGs. Chapters, paragraphs, the
   other figures and the refusal are the same.
+- **Public accuracy set, 2026-11-05, unreleased main.** Known text, about 1,100
+  characters each of English and Turkish written for this set
+  (`crates/paginaverto/tests/corpus/`). It is small and synthetic: it catches
+  regressions and shows the size of a problem, and it is no estimate for real
+  books. No language counts as supported on it yet.
+  - **Text layer** (`tests/accuracy.rs`, nine ways of laying out a line, run in
+    CI): CER 0.00% and every paragraph found, in both languages. 0.1.4 had up to
+    17.96% (English) and 12.37% (Turkish) on the layouts where it lost spaces.
+  - **OCR** (`tools/ocr-accuracy`, by hand, ocrs 0.13.1, 200 dpi), CER:
+
+    | | Arial clean | Arial noisy | Times clean | Times noisy |
+    | --- | ---: | ---: | ---: | ---: |
+    | English | 1.20% | 3.70% | 1.85% | 5.46% |
+    | Turkish | 13.04% | 16.01% | 14.09% | 17.07% |
+    | Turkish, letters folded to ASCII | 7.38% | 10.74% | 8.72% | 11.98% |
+
+    The model's ASCII alphabet costs Turkish about 5.5 points. The other part of
+    the gap to English (about 6 points on clean pages) is the model reading
+    Turkish words badly even without those letters.
+- **Text path on one Turkish book,** 0.1.4 against unreleased main, against a
+  Mistral OCR export (not ground truth): words matching 95.80% to 98.85%, wrongly
+  split 1,222 to 16, paragraphs 1,023 to 2,308 (Mistral 2,458).
 - **epublift's earlier numbers,** on one book each: about 99.8% word overlap for
   a born-digital book, about 92% word accuracy for OCR of a clean prose scan.
 
@@ -201,6 +225,12 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --locked --features paginaverto/ocr -- -D warnings
 cargo test --workspace --locked && cargo test --workspace --locked --features paginaverto/ocr
 cargo +1.97 check --workspace --locked --features paginaverto/ocr
+```
+
+The OCR accuracy tool stays out of the workspace:
+
+```sh
+cd tools/ocr-accuracy && cargo run --release -- <models dir> <font.ttf> ...
 ```
 
 Test fixtures are generated in the tests from known text (`tests/generated.rs`).
