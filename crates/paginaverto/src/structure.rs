@@ -15,6 +15,12 @@ use crate::{Block, Chapter, Figure};
 /// text follow it before the next heading.
 const MIN_CHAPTER_BODY: usize = 400;
 
+/// A heading has at most this many words.
+const HEADING_WORDS: usize = 12;
+
+/// Three recurrences of an edge block within this many pages make a head.
+const NEAR_PAGES: usize = 4;
+
 enum Item {
     Heading(String),
     Body(String),
@@ -32,12 +38,18 @@ pub(crate) fn chapters(pages: &[Page]) -> Vec<Chapter> {
     let mut items: Vec<Item> = Vec::new();
     for page in pages {
         let big: HashSet<&str> = page.big_font.iter().map(String::as_str).collect();
+        let mut first_on_page = true;
         for block in &page.blocks {
             if is_page_number(block) || heads.contains(&template(block)) {
                 continue;
             }
             let clean = text::squash(&dehyphen.replace_all(block, "$1$2"));
             if clean.is_empty() {
+                continue;
+            }
+            let continues = first_on_page && continue_across_page(&mut items, &clean, &dehyphen);
+            first_on_page = false;
+            if continues {
                 continue;
             }
             if is_heading(&clean, page.born_digital, &big) {
@@ -84,6 +96,28 @@ pub(crate) fn chapters(pages: &[Page]) -> Vec<Chapter> {
     chapters
 }
 
+/// A page's first block continues the paragraph the last page ended on, if
+/// that one stopped mid-sentence and this one starts in lower case. Figures
+/// between them stay where they are. Returns whether it was joined.
+fn continue_across_page(items: &mut [Item], block: &str, dehyphen: &Regex) -> bool {
+    if !block.chars().next().is_some_and(char::is_lowercase) {
+        return false;
+    }
+    let last = items
+        .iter_mut()
+        .rev()
+        .find(|i| !matches!(i, Item::Figure(_)));
+    let Some(Item::Body(body)) = last else {
+        return false;
+    };
+    if body.ends_with(['.', '!', '?', ':', ';', '…', '"', '”', '’', ')']) {
+        return false;
+    }
+    let joined = format!("{body} {block}");
+    *body = text::squash(&dehyphen.replace_all(&joined, "$1$2"));
+    true
+}
+
 /// A block reduced for recurrence: letters only, lowercased, roman-numeral
 /// words dropped, so "INTRODUCTION ix" and "12 TITLE" variants collapse.
 fn template(s: &str) -> String {
@@ -106,23 +140,30 @@ fn is_page_number(s: &str) -> bool {
             || t.chars().all(|c| "ivxlcdmIVXLCDM".contains(c)))
 }
 
-/// Templates of the first and last block of each page that recur on enough
-/// pages (a 30th of them, at least 5): running heads and feet.
+/// Templates of the first and last block of each page that are running heads
+/// or feet: those that recur on a 30th of the pages (at least 5), and short
+/// ones that recur on 3 pages close together, since a head can name a chapter
+/// of only a few pages.
 fn running_heads(pages: &[Page]) -> HashSet<String> {
-    let mut freq: HashMap<String, usize> = HashMap::new();
-    for page in pages {
+    let mut seen: HashMap<String, Vec<usize>> = HashMap::new();
+    for (n, page) in pages.iter().enumerate() {
         if let Some(first) = page.blocks.first() {
-            *freq.entry(template(first)).or_default() += 1;
+            seen.entry(template(first)).or_default().push(n);
         }
         if page.blocks.len() > 1
             && let Some(last) = page.blocks.last()
         {
-            *freq.entry(template(last)).or_default() += 1;
+            seen.entry(template(last)).or_default().push(n);
         }
     }
     let threshold = (pages.len() / 30).max(5);
-    freq.into_iter()
-        .filter(|(t, n)| t.len() > 3 && *n >= threshold)
+    seen.into_iter()
+        .filter(|(t, on)| {
+            t.len() > 3
+                && (on.len() >= threshold
+                    || (t.split_whitespace().count() <= HEADING_WORDS
+                        && on.windows(3).any(|w| w[2] - w[0] <= NEAR_PAGES)))
+        })
         .map(|(t, _)| t)
         .collect()
 }
@@ -131,17 +172,14 @@ fn running_heads(pages: &[Page]) -> HashSet<String> {
 /// letters, and is either mostly capitals (85%) or, on a born-digital page,
 /// shown in a notably large font.
 fn is_heading(s: &str, born_digital: bool, big_font: &HashSet<&str>) -> bool {
-    if s.split_whitespace().count() > 12 || s.chars().any(|c| c.is_ascii_digit()) {
+    if s.split_whitespace().count() > HEADING_WORDS || s.chars().any(|c| c.is_ascii_digit()) {
         return false;
     }
-    let letters: Vec<char> = s.chars().filter(|c| c.is_alphabetic()).collect();
-    if letters.len() < 3 {
+    if s.chars().filter(|c| c.is_alphabetic()).count() < 3 {
         return false;
     }
-    let upper = letters.iter().filter(|c| c.is_uppercase()).count();
-    let mostly_caps = upper as f32 / letters.len() as f32 >= 0.85;
     let large_font = born_digital && big_font.contains(text::letters_only(s).as_str());
-    mostly_caps || large_font
+    text::mostly_caps(s) || large_font
 }
 
 #[cfg(test)]
@@ -228,6 +266,42 @@ mod tests {
             ch.iter()
                 .any(|c| c.title.as_deref() == Some("BİRİNCİ BÖLÜM"))
         );
+    }
+
+    #[test]
+    fn paragraph_continues_across_a_page() {
+        let text = body(&chapters(&[
+            page(&["This sentence stops in the mid"]),
+            page(&["dle of nothing, and ends here."]),
+        ]));
+        assert_eq!(
+            text,
+            "This sentence stops in the mid dle of nothing, and ends here."
+        );
+    }
+
+    #[test]
+    fn hyphen_joins_across_a_page() {
+        let text = body(&chapters(&[page(&["Öğren-"]), page(&["cilerle geldi."])]));
+        assert_eq!(text, "Öğrencilerle geldi.");
+    }
+
+    #[test]
+    fn finished_sentence_does_not_continue() {
+        let ch = chapters(&[page(&["It ended."]), page(&["and this began."])]);
+        assert_eq!(ch[0].blocks.len(), 2);
+    }
+
+    #[test]
+    fn a_head_on_three_pages_goes_even_in_a_long_book() {
+        let mut pages: Vec<Page> = (0..300)
+            .map(|i| page(&[&format!("Paragraph number {i} with its own words.")]))
+            .collect();
+        for p in &mut pages[10..13] {
+            p.blocks.insert(0, "A SHORT CHAPTER".to_string());
+        }
+        let text = body(&chapters(&pages));
+        assert!(!text.contains("A SHORT CHAPTER"), "{text}");
     }
 
     #[test]

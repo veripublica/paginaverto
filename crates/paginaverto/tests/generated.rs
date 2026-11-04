@@ -292,6 +292,106 @@ fn scan_checks_come_in_order() {
     ));
 }
 
+/// The paragraphs of a page of `simple_font` text drawn by `ops`.
+fn page_text(ops: Vec<Operation>) -> Vec<String> {
+    paragraphs(&pdf(simple_font, None, &[ops]))
+}
+
+/// A long enough page: `line` shown five times, one under the other, by what
+/// `show` draws at each line.
+fn five_lines(show: impl Fn(&mut Vec<Operation>)) -> Vec<Operation> {
+    let mut ops = Vec::new();
+    for line in 0..5 {
+        ops.extend([
+            op("BT", vec![]),
+            op("Tf", vec!["F1".into(), 12.into()]),
+            op("Td", vec![72.into(), (700 - line * 14).into()]),
+        ]);
+        show(&mut ops);
+        ops.push(op("ET", vec![]));
+    }
+    ops
+}
+
+#[test]
+fn large_tj_adjustment_is_a_word_space() {
+    let ops = five_lines(|ops| {
+        let parts = vec![
+            Object::string_literal("Extraordinary"),
+            Object::Integer(-300),
+            Object::string_literal("circumstances"),
+        ];
+        ops.push(op("TJ", vec![Object::Array(parts)]));
+    });
+    let text = page_text(ops).join(" ");
+    assert_eq!(text, ["Extraordinary circumstances"; 5].join(" "));
+}
+
+#[test]
+fn small_tj_adjustment_is_only_kerning() {
+    let ops = five_lines(|ops| {
+        let parts = vec![
+            Object::string_literal("Extraordinary"),
+            Object::Integer(-40),
+            Object::string_literal("circumstances"),
+        ];
+        ops.push(op("TJ", vec![Object::Array(parts)]));
+    });
+    let text = page_text(ops).join(" ");
+    assert_eq!(text, ["Extraordinarycircumstances"; 5].join(" "));
+}
+
+#[test]
+fn showing_text_advances_so_a_later_run_stays_after_it() {
+    // Two Tj in a row with no positioning: the second continues the first.
+    let ops = five_lines(|ops| {
+        ops.push(op("Tj", vec![Object::string_literal("Extraordinary ")]));
+        ops.push(op("Tj", vec![Object::string_literal("circumstances")]));
+    });
+    let text = page_text(ops).join(" ");
+    assert_eq!(text, ["Extraordinary circumstances"; 5].join(" "));
+}
+
+#[test]
+fn character_spacing_counts_in_a_runs_width() {
+    // Without Tc in its width, the first run seems to end far before the
+    // second starts, which would read as a word space.
+    let a = "Extraordinary";
+    let tc = 2.0;
+    let gap = a.len() as f32 * (0.5 * 12.0 + tc);
+    let ops = five_lines(|ops| {
+        ops.push(op("Tc", vec![tc.into()]));
+        ops.push(op("Tj", vec![Object::string_literal(a)]));
+        ops.push(op("Tc", vec![0.into()]));
+        ops.push(op("Td", vec![gap.into(), 0.into()]));
+        ops.push(op("Tj", vec![Object::string_literal("circumstances")]));
+    });
+    let text = page_text(ops).join(" ");
+    assert_eq!(text, ["Extraordinarycircumstances"; 5].join(" "));
+}
+
+#[test]
+fn a_capitals_line_is_not_merged_into_the_text_under_it() {
+    let mut ops = Vec::new();
+    let lines = [
+        "THE FIRST PART",
+        "Some words that open the part and run for a while longer than this.",
+        "Some more words that go on after them, so that the page has text.",
+    ];
+    for (n, line) in lines.iter().enumerate() {
+        ops.extend([
+            op("BT", vec![]),
+            op("Tf", vec!["F1".into(), 12.into()]),
+            op("Td", vec![72.into(), (700 - n as i64 * 14).into()]),
+            op("Tj", vec![Object::string_literal(*line)]),
+            op("ET", vec![]),
+        ]);
+    }
+    let text = page_text(ops);
+    assert_eq!(text[0], "THE FIRST PART");
+    assert_eq!(text.len(), 2);
+}
+
 /// A tiny JPEG, with zeros after its end so that it compresses.
 fn jpeg() -> Vec<u8> {
     let img = image::GrayImage::from_pixel(8, 8, image::Luma([128]));

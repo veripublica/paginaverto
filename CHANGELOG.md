@@ -11,6 +11,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Better text from PDFs with a text layer.** Parity with epublift cli-v4.5.1
+  ends here: this changes the output of most books.
+  - Our own extractor now follows the text position properly: showing text
+    advances it, character, word and horizontal spacing count, a large `TJ`
+    adjustment is a word space, and `q`/`Q` save the text state.
+  - It is now the first choice. lopdf's reading is the fallback where ours lost
+    letters or clearly glues words. A scan's text layer placed word by word no
+    longer comes out as one word per paragraph.
+  - Paragraphs: one stray outdented line no longer makes a page look indented, a
+    lower-case line never starts a paragraph, a change of font size or of
+    capitals does, and a paragraph continues across a page.
+  - Running heads: one that names a short chapter is caught, and the Turkish
+    capitals (İ, Ç, Ş, …) now match when heads and headings are compared.
+
+  On one Turkish book with a reference, the words matching it rose from 95.80%
+  to 98.85%, and words wrongly split fell from 1,222 to 16.
+
 ## [0.1.4] - 2026-11-04
 
 ### Fixed

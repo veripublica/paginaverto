@@ -132,24 +132,30 @@ pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figure
     let born_digital = !has_full_page_image(doc, page_id);
     let mut big_font = Vec::new();
     let blocks = if born_digital {
-        // Both extractors run and the cleaner one wins: lopdf's runs words
-        // together on some fonts, ours on others. Ours runs anyway, for the
-        // font-size signal.
+        // Ours knows the page's geometry, so its lines and paragraphs are
+        // the better ones; lopdf's is the fallback where ours reads badly.
+        // Ours runs anyway, for the font-size signal.
         let runs = runs(doc, page_id);
         big_font = big_font_texts(&runs);
         let ours = blocks_from_runs(&runs);
         let theirs = lopdf_blocks(doc, page_id, page_num);
-        if glue_score(&theirs) <= glue_score(&ours) {
+        if reads_worse(&ours, &theirs) {
             theirs
         } else {
             ours
         }
     } else {
         // A scan with an OCR text layer: lopdf reads those layers well; ours
-        // is the fallback when it finds nothing.
+        // is the fallback when it finds nothing, or when a layer placed word
+        // by word comes out of lopdf one word to a line.
         let theirs = lopdf_blocks(doc, page_id, page_num);
-        if theirs.is_empty() {
-            blocks_from_runs(&runs(doc, page_id))
+        if theirs.is_empty() || word_by_word(&theirs) {
+            let ours = blocks_from_runs(&runs(doc, page_id));
+            if theirs.is_empty() || !reads_worse(&ours, &theirs) {
+                ours
+            } else {
+                theirs
+            }
         } else {
             theirs
         }
@@ -166,6 +172,31 @@ pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figure
         figures,
     }
 }
+
+/// Are most of these blocks a single word? Text no reader would call lines.
+fn word_by_word(blocks: &[String]) -> bool {
+    let single = blocks
+        .iter()
+        .filter(|b| b.split_whitespace().nth(1).is_none())
+        .count();
+    blocks.len() >= 10 && single * 2 > blocks.len()
+}
+
+/// Should `ours` give way to `theirs`? Only for a clear reason: it lost a
+/// good part of the letters, or holds clearly more missed spaces. A lower
+/// glue score alone is no reason, because it does not see split words and
+/// paragraphs.
+fn reads_worse(ours: &[String], theirs: &[String]) -> bool {
+    let (ours_glue, ours_letters) = glue_score(ours);
+    let (theirs_glue, theirs_letters) = glue_score(theirs);
+    // `glue_score` gives letters as a negative, for its ordering.
+    let lost_letters = (-ours_letters) * 10 < (-theirs_letters) * 9;
+    lost_letters || ours_glue > theirs_glue.saturating_add(GLUE_MARGIN)
+}
+
+/// How much more glued (per mille of letters) our text must read than lopdf's
+/// before lopdf's is taken.
+const GLUE_MARGIN: u32 = 20;
 
 /// How badly text reads: the share (per mille) of letters in implausibly
 /// long words (18+ letters: a missed space), then more letters is better.
@@ -212,20 +243,17 @@ pub(crate) fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Letters only, ASCII-lowercased, words single-spaced: for matching text
-/// across pages and against large-font runs.
+/// Letters only, lowercased, words single-spaced: for matching text across
+/// pages and against large-font runs. The four Turkish i's fold into one, so
+/// that "KAPI" and "Kapı", or "BİRİNCİ" and "Birinci", match whatever the
+/// language.
 pub(crate) fn letters_only(s: &str) -> String {
-    // PARITY: `to_ascii_lowercase` leaves non-ASCII capitals (İ, Ç, Ş, Ğ, Ö,
-    // Ü, …) as they are, so Turkish running heads and headings match less
-    // well. Fix from 0.2.0, measured.
     let mapped: String = s
         .chars()
-        .map(|c| {
-            if c.is_alphabetic() {
-                c.to_ascii_lowercase()
-            } else {
-                ' '
-            }
+        .map(|c| match c {
+            'İ' | 'I' | 'ı' => 'i',
+            c if c.is_alphabetic() => c.to_lowercase().next().unwrap_or(c),
+            _ => ' ',
         })
         .collect();
     squash(&mapped)
@@ -292,28 +320,35 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
     let fonts = page_fonts(doc, page_id);
 
     let mut ctm = IDENTITY;
-    let mut saved: Vec<Mat> = Vec::new();
     let mut tm = IDENTITY;
     let mut tlm = IDENTITY;
-    let mut size = 0.0_f32;
-    let mut leading = 0.0_f32;
+    let mut ts = TextState::default();
     let mut font: Option<&Font> = None;
+    let mut saved: Vec<(Mat, TextState, Option<&Font>)> = Vec::new();
 
-    // PARITY: showing text does not advance the text matrix, so every run
-    // starts where its line (or last positioning operator) started.
-    let show =
-        |out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, font: Option<&Font>, bytes: &[u8]| {
-            let (text, adv) = decode(font, bytes);
-            push(out, tm, ctm, size, text, adv);
-        };
+    // Showing text advances the text matrix, so the next run starts where
+    // this one ended.
+    let show = |out: &mut Vec<Run>,
+                tm: &mut Mat,
+                ctm: Mat,
+                ts: TextState,
+                font: Option<&Font>,
+                bytes: &[u8]| {
+        let shown = decode(font, bytes);
+        let width = ts.width(&shown);
+        push(out, *tm, ctm, ts.size, shown.text, width);
+        *tm = mul(translate(width, 0.0), *tm);
+    };
 
     for op in &content.operations {
         let a = &op.operands;
         match op.operator.as_str() {
-            "q" => saved.push(ctm),
+            "q" => saved.push((ctm, ts, font)),
             "Q" => {
-                if let Some(m) = saved.pop() {
+                if let Some((m, t, f)) = saved.pop() {
                     ctm = m;
+                    ts = t;
+                    font = f;
                 }
             }
             "cm" if a.len() == 6 => ctm = mul(mat(a), ctm),
@@ -322,7 +357,7 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
                 tlm = IDENTITY;
             }
             "Tf" if a.len() == 2 => {
-                size = num(&a[1]);
+                ts.size = num(&a[1]);
                 font = a[0].as_name().ok().and_then(|n| fonts.get(n));
             }
             "Td" if a.len() == 2 => {
@@ -330,7 +365,7 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
                 tm = tlm;
             }
             "TD" if a.len() == 2 => {
-                leading = -num(&a[1]);
+                ts.leading = -num(&a[1]);
                 tlm = mul(translate(num(&a[0]), num(&a[1])), tlm);
                 tm = tlm;
             }
@@ -338,47 +373,60 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
                 tm = mat(a);
                 tlm = tm;
             }
-            "TL" if a.len() == 1 => leading = num(&a[0]),
+            "TL" if a.len() == 1 => ts.leading = num(&a[0]),
+            "Tc" if a.len() == 1 => ts.char_space = num(&a[0]),
+            "Tw" if a.len() == 1 => ts.word_space = num(&a[0]),
+            "Tz" if a.len() == 1 => ts.h_scale = num(&a[0]) / 100.0,
             "T*" => {
-                tlm = mul(translate(0.0, -leading), tlm);
+                tlm = mul(translate(0.0, -ts.leading), tlm);
                 tm = tlm;
             }
             "Tj" if !a.is_empty() => {
                 if let Ok(bytes) = a[0].as_str() {
-                    show(&mut out, tm, ctm, size, font, bytes);
+                    show(&mut out, &mut tm, ctm, ts, font, bytes);
                 }
             }
             "'" if !a.is_empty() => {
-                tlm = mul(translate(0.0, -leading), tlm);
+                tlm = mul(translate(0.0, -ts.leading), tlm);
                 tm = tlm;
                 if let Ok(bytes) = a[0].as_str() {
-                    show(&mut out, tm, ctm, size, font, bytes);
+                    show(&mut out, &mut tm, ctm, ts, font, bytes);
                 }
             }
             "\"" if a.len() == 3 => {
-                tlm = mul(translate(0.0, -leading), tlm);
+                ts.word_space = num(&a[0]);
+                ts.char_space = num(&a[1]);
+                tlm = mul(translate(0.0, -ts.leading), tlm);
                 tm = tlm;
                 if let Ok(bytes) = a[2].as_str() {
-                    show(&mut out, tm, ctm, size, font, bytes);
+                    show(&mut out, &mut tm, ctm, ts, font, bytes);
                 }
             }
             "TJ" if !a.is_empty() => {
                 if let Ok(arr) = a[0].as_array() {
                     let mut text = String::new();
-                    let mut adv = 0.0_f32;
+                    let mut width = 0.0_f32;
                     for el in arr {
                         match el {
                             Object::String(bytes, _) => {
-                                let (t, w) = decode(font, bytes);
-                                text.push_str(&t);
-                                adv += w;
+                                let shown = decode(font, bytes);
+                                width += ts.width(&shown);
+                                text.push_str(&shown.text);
                             }
-                            // A positive number moves the next glyph left.
-                            Object::Integer(_) | Object::Real(_) => adv -= num(el) / 1000.0,
+                            // A positive number moves the next glyph left. A
+                            // large move right is a word space nothing shows.
+                            Object::Integer(_) | Object::Real(_) => {
+                                let em = -num(el) / 1000.0;
+                                width += em * ts.size * ts.h_scale;
+                                if em > WORD_GAP_EM && !text.ends_with(' ') {
+                                    text.push(' ');
+                                }
+                            }
                             _ => {}
                         }
                     }
-                    push(&mut out, tm, ctm, size, text, adv);
+                    push(&mut out, tm, ctm, ts.size, text, width);
+                    tm = mul(translate(width, 0.0), tm);
                 }
             }
             _ => {}
@@ -387,9 +435,45 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
     out
 }
 
-/// Record a run at the current text position. `adv_em` is its advance in
-/// em units.
-fn push(out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, text: String, adv_em: f32) {
+/// The text state that moves or scales glyphs. Part of the graphics state, so
+/// `q` and `Q` save and restore it; `BT` does not reset it.
+#[derive(Clone, Copy)]
+struct TextState {
+    size: f32,
+    leading: f32,
+    char_space: f32,
+    word_space: f32,
+    h_scale: f32,
+}
+
+impl Default for TextState {
+    fn default() -> Self {
+        TextState {
+            size: 0.0,
+            leading: 0.0,
+            char_space: 0.0,
+            word_space: 0.0,
+            h_scale: 1.0,
+        }
+    }
+}
+
+impl TextState {
+    /// How far a shown string moves the text position, in text space.
+    fn width(&self, s: &Shown) -> f32 {
+        (s.width_em * self.size
+            + s.codes as f32 * self.char_space
+            + s.word_spaces as f32 * self.word_space)
+            * self.h_scale
+    }
+}
+
+/// A gap wider than this (in em) between glyphs is a space between words.
+const WORD_GAP_EM: f32 = 0.2;
+
+/// Record a run at the current text position. `width` is its advance in text
+/// space.
+fn push(out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, text: String, width: f32) {
     if text.trim().is_empty() {
         return;
     }
@@ -400,7 +484,7 @@ fn push(out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, text: String, adv_em: 
         text,
         font_size: size * yscale,
         x: m[4],
-        end_x: m[4] + adv_em * size * xscale,
+        end_x: m[4] + width * xscale,
         y: m[5],
     });
 }
@@ -419,6 +503,7 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
     struct Line {
         y: f32,
         x: f32,
+        end: f32,
         font: f32,
         text: String,
     }
@@ -434,19 +519,24 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
         }
         group.sort_by(|a, b| a.x.total_cmp(&b.x));
         // Many PDFs place each glyph or word as its own run; a space goes
-        // only where the gap from the previous run's real end exceeds 0.2 em.
+        // where the gap from the previous run's real end exceeds 0.2 em, or
+        // where either run shows a space at that edge.
         let mut text = String::new();
-        let mut prev_end: Option<f32> = None;
+        let mut prev: Option<&Run> = None;
         for r in &group {
             let t = r.text.trim();
             if t.is_empty() {
                 continue;
             }
-            if prev_end.is_some_and(|pe| r.x - pe > r.font_size * 0.2) {
+            if prev.is_some_and(|p| {
+                r.x - p.end_x > r.font_size * WORD_GAP_EM
+                    || p.text.ends_with(char::is_whitespace)
+                    || r.text.starts_with(char::is_whitespace)
+            }) {
                 text.push(' ');
             }
             text.push_str(t);
-            prev_end = Some(r.end_x);
+            prev = Some(r);
         }
         let text = squash(&text);
         if text.is_empty() {
@@ -455,6 +545,7 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
         lines.push(Line {
             y: y0,
             x: group.iter().map(|r| r.x).fold(f32::INFINITY, f32::min),
+            end: group.iter().map(|r| r.end_x).fold(f32::MIN, f32::max),
             font: group.iter().map(|r| r.font_size).fold(0.0, f32::max),
             text,
         });
@@ -467,15 +558,25 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
         .collect();
     gaps.sort_by(f32::total_cmp);
     let median_gap = gaps.get(gaps.len() / 2).copied().unwrap_or(0.0);
-    let left = lines.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
+    let left = body_left(lines.iter().map(|l| l.x));
+    let right = lines.iter().map(|l| l.end).fold(f32::MIN, f32::max);
 
     let mut blocks = Vec::new();
     let mut cur = String::new();
-    let mut prev_y: Option<f32> = None;
+    let mut prev: Option<&Line> = None;
     for l in &lines {
+        let indented = l.x > left + l.font;
+        // Lines indented alike are one block (a quotation) while the one
+        // before runs on to the margin; a short one ended its paragraph.
+        let continues_indent =
+            prev.is_some_and(|p| (p.x - l.x).abs() < l.font * 0.5 && p.end > right - l.font * 3.0);
+        // A lower-case start continues a sentence, however far it is indented.
+        let starts_lower = l.text.chars().next().is_some_and(char::is_lowercase);
         let new_block = cur.is_empty()
-            || prev_y.is_some_and(|py| median_gap > 0.0 && py - l.y > median_gap * 1.6)
-            || l.x > left + l.font;
+            || prev.is_some_and(|p| median_gap > 0.0 && p.y - l.y > median_gap * 1.6)
+            || prev.is_some_and(|p| (p.font - l.font).abs() > l.font.max(p.font) * 0.15)
+            || prev.is_some_and(|p| mostly_caps(&p.text) != mostly_caps(&l.text))
+            || (indented && !continues_indent && !starts_lower);
         if new_block {
             if !cur.trim().is_empty() {
                 blocks.push(cur.trim().to_string());
@@ -487,12 +588,36 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
             }
             cur.push_str(&l.text);
         }
-        prev_y = Some(l.y);
+        prev = Some(l);
     }
     if !cur.trim().is_empty() {
         blocks.push(cur.trim().to_string());
     }
     blocks
+}
+
+/// At least 3 letters, and 85% of them capitals: how a heading can look.
+pub(crate) fn mostly_caps(s: &str) -> bool {
+    let (mut letters, mut upper) = (0usize, 0usize);
+    for c in s.chars().filter(|c| c.is_alphabetic()) {
+        letters += 1;
+        upper += usize::from(c.is_uppercase());
+    }
+    letters >= 3 && upper as f32 / letters as f32 >= 0.85
+}
+
+/// The left edge of a page's text: the leftmost position that a tenth of its
+/// lines (and at least two) share, so that one page number or outdented line
+/// does not make everything else look indented.
+fn body_left(xs: impl Iterator<Item = f32>) -> f32 {
+    let xs: Vec<f32> = xs.collect();
+    let min = xs.iter().copied().fold(f32::INFINITY, f32::min);
+    let needed = (xs.len() / 10).max(2);
+    let mut at: Vec<i32> = xs.iter().map(|x| x.round() as i32).collect();
+    at.sort_unstable();
+    at.chunk_by(|a, b| a == b)
+        .find(|same| same.len() >= needed)
+        .map_or(min, |same| same[0] as f32)
 }
 
 /// Letters-only texts of runs at least 1.3× the page's median font size.
@@ -565,13 +690,17 @@ fn page_fonts<'a>(doc: &'a Document, page_id: ObjectId) -> HashMap<Vec<u8>, Font
     out
 }
 
-/// Shown bytes to (text, advance in em).
-fn decode(font: Option<&Font>, bytes: &[u8]) -> (String, f32) {
+/// Shown bytes to text and advance.
+fn decode(font: Option<&Font>, bytes: &[u8]) -> Shown {
+    // Word spacing applies to the single-byte code 32 only.
+    let single_byte_spaces = bytes.iter().filter(|&&b| b == 32).count();
     let Some(font) = font else {
-        return (
-            String::from_utf8_lossy(bytes).into_owned(),
-            bytes.len() as f32 * 0.5,
-        );
+        return Shown {
+            text: String::from_utf8_lossy(bytes).into_owned(),
+            width_em: bytes.len() as f32 * 0.5,
+            codes: bytes.len(),
+            word_spaces: single_byte_spaces,
+        };
     };
     let width = |code: u32| {
         font.widths
@@ -584,7 +713,12 @@ fn decode(font: Option<&Font>, bytes: &[u8]) -> (String, f32) {
             let text = enc
                 .bytes_to_string(bytes)
                 .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned());
-            (text, bytes.iter().map(|&b| width(u32::from(b))).sum())
+            Shown {
+                text,
+                width_em: bytes.iter().map(|&b| width(u32::from(b))).sum(),
+                codes: bytes.len(),
+                word_spaces: single_byte_spaces,
+            }
         }
         Decoder::Cmap { map, code_len } => {
             let n = (*code_len).max(1);
@@ -598,9 +732,25 @@ fn decode(font: Option<&Font>, bytes: &[u8]) -> (String, f32) {
                 }
                 adv += width(code);
             }
-            (text, adv)
+            Shown {
+                text,
+                width_em: adv,
+                codes: bytes.len() / n,
+                word_spaces: if n == 1 { single_byte_spaces } else { 0 },
+            }
         }
     }
+}
+
+/// What a shown string came to.
+struct Shown {
+    text: String,
+    /// The glyphs' own widths, in em.
+    width_em: f32,
+    /// Character codes shown; each takes the character spacing.
+    codes: usize,
+    /// Those that take the word spacing too.
+    word_spaces: usize,
 }
 
 /// Per-code widths (em) and the default width: `/Widths` for a simple font,
@@ -1111,9 +1261,21 @@ endcmap";
     }
 
     #[test]
-    fn letters_only_keeps_non_ascii_capitals() {
-        // PARITY: documents the quirk to fix in 0.2.0.
-        assert_eq!(letters_only("İSTANBUL, 12 Ekim"), "İstanbul ekim");
-        assert_eq!(letters_only("ÇAĞ"), "ÇaĞ");
+    fn letters_only_folds_every_capital_and_the_turkish_i() {
+        assert_eq!(letters_only("İSTANBUL, 12 Ekim"), "istanbul ekim");
+        assert_eq!(letters_only("ÇAĞ"), "çağ");
+        assert_eq!(letters_only("KAPI"), letters_only("Kapı"));
+        assert_eq!(letters_only("BİRİNCİ"), letters_only("Birinci"));
+    }
+
+    #[test]
+    fn body_left_ignores_a_lone_outdented_line() {
+        let xs = [40.0, 72.0, 72.0, 72.0, 90.0, 72.0];
+        assert_eq!(body_left(xs.into_iter()), 72.0);
+    }
+
+    #[test]
+    fn body_left_falls_back_to_the_minimum() {
+        assert_eq!(body_left([90.0, 72.0].into_iter()), 72.0);
     }
 }
