@@ -11,6 +11,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-05
+
 ### Added
 
 - **A public accuracy set:** known English and Turkish text, read back from

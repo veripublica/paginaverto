@@ -9,17 +9,13 @@ paginaverto's output.
   depend on anything AGPL-only or more restrictive (not imagoverto). Models
   keep their own licenses (ocrs models: CC BY-SA 4.0). No external PRs until
   a CLA exists.
-- **The plan:** `veripublica/paginaverto/PLAN-0.1.0.md`. Read it before
-  starting a step.
+- **The plan:** `veripublica/paginaverto/PLAN-0.2.0.md` (0.3 is next: Turkish
+  OCR, JBIG2/JPEG2000, page images). Read it before starting a step.
 
-## 0.1.0 is a parity release (Baris, 2026-10-31)
+## Output and epublift
 
-- Same output as epublift cli-v4.5.1's PDF import (`src/pdf/` @ db50c3a):
-  chapters, paragraphs and figures byte for byte, same refusals.
-- **Fix nothing in 0.1.0**, not even the obvious faults; they are listed in
-  the plan and fixed from 0.2.0, each measured. One exception, Baris's yes on
-  2026-11-04: 0.1.4 undoes the filters in front of `DCTDecode`, because those
-  figures made invalid EPUBs.
+- 0.1 matched epublift cli-v4.5.1's PDF import. From 0.2.0 the output may change,
+  and every change is measured on the 18 local PDFs and the public accuracy set.
 - epublift is **read only** (`/Users/baris/Documents/Projects/epublift`).
   Questions go by note. Write our own code.
 - `Cargo.lock` matches epublift's versions package for package. Do not run a

@@ -11,14 +11,14 @@ Figures below name the versions they were measured on. Current version: 0.1.4.
 paginaverto reads PDFs and turns them into a structured document. It ships as a
 Rust library (crates `paginaverto` and `paginaverto-ocr`) and a WebAssembly
 package (`@veripublica/paginaverto-wasm`), released together under one version.
-`main` also has a CLI (below). The web page at
+It also ships a CLI (below), with binaries for eight targets. The web page at
 <https://veripublica.github.io/paginaverto/> runs the WebAssembly build; the
 file never leaves the browser.
 
-0.1 is a parity release. It does what
-[epublift](https://github.com/ePubLift/epublift)'s PDF import did in cli-v4.5.1
-(the same chapters, paragraphs, figures and refusals), and epublift builds on
-it. The one deliberate difference is in [Limits](#limits-of-01).
+0.1 was a parity release: it did what
+[epublift](https://github.com/ePubLift/epublift)'s PDF import did in cli-v4.5.1.
+From 0.2.0 the output changes, and every change is measured
+([Measurements](#measurements)). epublift builds on it.
 
 What it reads into a `Document`, metadata, pages, and headings, paragraphs and
 figures in reading order, from three kinds of PDF:
@@ -65,9 +65,9 @@ Rules the code follows:
 
 ```toml
 [dependencies]
-paginaverto = "0.1"
+paginaverto = "0.2"
 # With OCR for scans:
-# paginaverto = { version = "0.1", features = ["ocr"] }
+# paginaverto = { version = "0.2", features = ["ocr"] }
 ```
 
 On crates.io from 0.1.2; 0.1.0 and 0.1.1 are git tags only. The JavaScript
@@ -277,10 +277,7 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 `"figure"` with `mediaType`, `ext` and `data`), `ErrorKind` and
 `PaginavertoError`, which is what `read` throws.
 
-## Limits of 0.1
-
-Being fixed on `main` for 0.2.0, each measured; what is still true of `main`
-stays here.
+## Limits
 
 - OCR reads ASCII only. The ocrs 0.13.1 model is trained on ASCII text, so it
   cannot produce ç ğ ı İ ö ş ü, other accented letters or non-Latin scripts. The
@@ -303,14 +300,15 @@ stays here.
   the top of its page, wherever its text really begins, and its printed title stays
   in the text as a paragraph.
 
-The one deliberate difference from epublift cli-v4.5.1, since 0.1.4: figures with
+Since 0.1.4, figures with
 filters in front of `DCTDecode` (`/Filter [/FlateDecode /DCTDecode]`) have those
 filters undone. epublift's import emitted the still-deflated bytes under an
 `image/jpeg` label, which made an invalid EPUB. If the filters cannot be undone,
 or the result is not a JPEG, there is no figure.
 
 The engines are pinned exactly (lopdf 0.45.0, ocrs 0.13.1, rten 0.26.0, image
-0.25.10), because their behaviour is part of the output. They move from 0.2.0 on.
+0.25.10), because their behaviour is part of the output. They have not moved in 0.2.0; each
+move changes the output, so each will be measured on its own.
 `Cargo.lock` matches epublift's versions package for package, so do not run a
 plain `cargo update`.
 
@@ -323,7 +321,7 @@ plain `cargo update`.
 - **0.1.4 against 0.1.3,** 2026-11-04, same 18 PDFs: 11 figures changed, in two
   books (10 of 23, 1 of 9), and all 11 are now JPEGs. Chapters, paragraphs, the
   other figures and the refusal are the same.
-- **Public accuracy set, 2026-11-05, unreleased main.** Known text, about 1,100
+- **Public accuracy set, 2026-11-05, 0.2.0.** Known text, about 1,100
   characters each of English and Turkish written for this set
   (`crates/paginaverto/tests/corpus/`). It is small and synthetic: it catches
   regressions and shows the size of a problem, and it is no estimate for real
@@ -346,13 +344,13 @@ plain `cargo update`.
     The model's ASCII alphabet costs Turkish about 5.5 points. The other part of
     the gap to English (about 6 points on clean pages) is the model reading
     Turkish words badly even without those letters.
-- **Text path on one Turkish book,** 0.1.4 against unreleased main, against a
+- **Text path on one Turkish book,** 0.1.4 against 0.2.0, against a
   Mistral OCR export (not ground truth): words matching 95.80% to 98.85%, wrongly
   split 1,222 to 16, paragraphs 1,023 to 2,308 (Mistral 2,458).
 - **epublift's earlier numbers,** on one book each: about 99.8% word overlap for
   a born-digital book, about 92% word accuracy for OCR of a clean prose scan.
 
-- **Chapters, `main` after 0.1.4,** 2026-11-05, same 18 PDFs, against the commit
+- **Chapters, 0.2.0,** 2026-11-05, same 18 PDFs, against the commit
   before. Eleven are byte-identical, and one is refused the same. Three kept every
   word and only changed levels, with no usable outline, so a printed table of
   contents decided: 154 to 23, 223 to 56 and 28 to 23 chapters. Their outlines,
@@ -362,23 +360,23 @@ plain `cargo update`.
   5 to 6 (6 entries), 9 to 13 (12), 9 to 45 (44). They lost no letters. Of those 62
   entries, 31 were found on their page or the next, 31 are titles only the outline
   holds.
-- **OCR paragraphs, `main` after 0.1.4,** 2026-11-05: on the two scans read by OCR,
+- **OCR paragraphs, 0.2.0,** 2026-11-05: on the two scans read by OCR,
   357 to 278 paragraphs on one with few letters on its pages, 26 to 5 on the other,
   with the same letters on that one. The first keeps 61 more letters of 543; a short
   line that now joins a paragraph is no longer dropped as a head or page number,
   which is the likely reason, not checked. The other 15 PDFs that read are unchanged.
-- **Italics, `main` after 0.1.4,** 2026-11-05, on one Turkish book against Mistral's
+- **Italics, 0.2.0,** 2026-11-05, on one Turkish book against Mistral's
   export, which is not ground truth. Of Mistral's 107 italic spans counted here, 102
   are italic in ours and 105 are in our text at all. Ours has 169 italic runs, 100 of
   which Mistral marks; whether the other 69 are right is not known.
-- **Boxes, `main` after 0.1.4,** 2026-11-05, share of text blocks with a position:
+- **Boxes, 0.2.0,** 2026-11-05, share of text blocks with a position:
   99 to 100% on 9 PDFs, 43 to 85% on 3, and 0 to 4% on 5, which are read through
   lopdf or by OCR on a turned page. One scan is refused.
-- **`inspect`, `main` after 0.1.4,** 2026-11-05, same 18 PDFs: all read. The one
+- **`inspect`, 0.2.0,** 2026-11-05, same 18 PDFs: all read. The one
   known JBIG2 scan reports 292 of 292 pages undecodable, exit `1`. In 7 of the PDFs
   with text, 1 to 23 image-only pages are in a format that cannot be decoded; those
   report warnings, exit `0`.
-- **Threads, `main` after 0.1.4,** 2026-11-05, same 18 PDFs on 10 cores: chapters,
+- **Threads, 0.2.0,** 2026-11-05, same 18 PDFs on 10 cores: chapters,
   paragraphs and figures byte-identical to one thread and to the commit before.
   That is at 1 and 8 threads, and at 1, 2, 4 and 8 on the two scans. Text layers
   read 3.7 to 5.1 times faster at 8 threads on the larger books. OCR, on one small
