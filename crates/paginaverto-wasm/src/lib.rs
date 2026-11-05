@@ -68,6 +68,8 @@ export type ErrorKind =
   | "UndecodableFonts"
   | "NoText"
   | "QualityGate"
+  | "LimitExceeded"
+  | "Cancelled"
   | "Internal";
 
 /** What `read` throws: an `Error` whose `kind` names the reason. */
@@ -110,6 +112,8 @@ pub fn kind(e: &Error) -> &'static str {
         Error::UndecodableFonts => "UndecodableFonts",
         Error::NoText => "NoText",
         Error::QualityGate => "QualityGate",
+        Error::LimitExceeded { .. } => "LimitExceeded",
+        Error::Cancelled => "Cancelled",
         _ => "Internal",
     }
 }
@@ -182,6 +186,11 @@ mod tests {
             Error::UndecodableFonts,
             Error::NoText,
             Error::QualityGate,
+            Error::LimitExceeded {
+                what: paginaverto::LimitKind::Pages,
+                limit: 1,
+            },
+            Error::Cancelled,
             Error::Internal(String::new()),
         ];
         for e in &all {

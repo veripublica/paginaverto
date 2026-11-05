@@ -25,8 +25,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the caller had fetched the models. `Error` is `#[non_exhaustive]`, so this is
   additive; the npm package's `ErrorKind` gains the same name.
 
+- **Limits (`Options::limits`):** the file's size, the number of pages, what one
+  stream and one page's content may decode to, and the pixels of one image. Going
+  over one refuses the document with `Error::LimitExceeded`, which names it. The
+  defaults (4 GiB, 50,000 pages, 1 GiB, 128 MiB, 256 million pixels) refused none
+  of the 18 PDFs measured. Compressed object streams are covered too, which lopdf
+  would otherwise drop silently, making the PDF look like a scan.
+- **Cancel (`Options::cancel`):** stops a read from another thread, between pages,
+  with `Error::Cancelled`.
+- **Progress (`Options::progress`):** reports each page as it finishes.
+
 ### Changed
 
+- **Pages are read in parallel,** on every core but two (`Options::threads`). The
+  output does not depend on the thread count: byte-identical on 18 PDFs at 1 and 8
+  threads. Text layers read about 4 times faster on 10 cores. OCR uses at most 4
+  threads by default and gains less, about 1.5 times on one scan, since the models
+  run on a pool of their own.
 - **Better text from PDFs with a text layer.** Parity with epublift cli-v4.5.1
   ends here: this changes the output of most books.
   - Our own extractor now follows the text position properly: showing text

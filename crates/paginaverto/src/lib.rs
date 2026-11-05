@@ -26,8 +26,16 @@ use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
+use lopdf::ObjectId;
+use parallel::Pool;
+
+mod limits;
+mod parallel;
 mod structure;
 mod text;
+
+pub use limits::{LimitKind, Limits};
+pub use parallel::{Cancel, PageDone, Progress};
 
 #[cfg(feature = "ocr")]
 pub use paginaverto_ocr::{MODEL_BASE_URL, MODELS, ModelFile, ONNX_MODELS};
@@ -50,6 +58,18 @@ pub struct Options {
     pub language: Option<String>,
     /// Whether scans may be recognised, and with which models.
     pub ocr: Ocr,
+    /// What a document may cost before it is refused.
+    pub limits: Limits,
+    /// How many threads read pages. `None`: every core but two, and at least
+    /// one, and no more than four for OCR, where more does not help. The output
+    /// does not depend on it. OCR's models also run on a pool of their own
+    /// (rten's: the machine's performance cores, or `RTEN_NUM_THREADS`), which
+    /// this does not set.
+    pub threads: Option<usize>,
+    /// Stops a read from another thread.
+    pub cancel: Cancel,
+    /// Told about each page as it finishes.
+    pub progress: Option<Progress>,
 }
 
 /// Character recognition for scans with no text layer.
@@ -162,6 +182,15 @@ pub enum Error {
     NoText,
     /// The decoded text is mostly non-letters: the fonts did not decode.
     QualityGate,
+    /// The document went over one of the [`Limits`].
+    LimitExceeded {
+        /// Which limit.
+        what: LimitKind,
+        /// The limit's value.
+        limit: u64,
+    },
+    /// [`Cancel::cancel`] was called.
+    Cancelled,
     /// An internal failure (a panic in a dependency), caught at the boundary.
     Internal(String),
 }
@@ -198,6 +227,10 @@ impl fmt::Display for Error {
                  structure we can't read yet (e.g. object streams); support is \
                  coming in a later release",
             ),
+            Error::LimitExceeded { what, limit } => {
+                write!(f, "this PDF goes over the limit of {limit} {what}")
+            }
+            Error::Cancelled => f.write_str("cancelled"),
             Error::Internal(e) => write!(f, "internal error: {e}"),
         }
     }
@@ -224,27 +257,40 @@ pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
 }
 
 fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
-    let doc = match input {
-        Input::Path(p) => lopdf::Document::load(p),
-        Input::Bytes(b) => lopdf::Document::load_mem(b),
+    let limits = &opts.limits;
+    let file_bytes = match input {
+        // A file that cannot be read is reported by the load below.
+        Input::Path(p) => std::fs::metadata(p).map_or(0, |m| m.len()),
+        Input::Bytes(b) => b.len() as u64,
+    };
+    if file_bytes > limits.max_file_bytes {
+        return Err(Limits::exceeded(
+            LimitKind::FileBytes,
+            limits.max_file_bytes,
+        ));
     }
-    .map_err(|e| Error::Open(with_causes(&e)))?;
+    let doc = limits.load(input)?;
+    limits.check(&doc)?;
 
-    let kind = text::classify(&doc);
+    let pool = Pool {
+        threads: opts.threads,
+        cancel: &opts.cancel,
+    };
+    let page_list: Vec<_> = doc.get_pages().into_iter().collect();
+    let kind = text::classify(&doc, &page_list, &pool)?;
     let pages: Vec<text::Page> = match kind {
         text::Kind::Scan => {
             // Before OCR's checks: nobody should fetch models for this.
             if let Some(formats) = text::undecodable_scan(&doc) {
                 return Err(Error::UndecodableImages(formats));
             }
-            scan_pages(&doc, opts)?
+            scan_pages(&doc, &page_list, &pool, opts)?
         }
         text::Kind::TextLayer => {
             let with_figures = text::is_born_digital(&doc);
-            doc.get_pages()
-                .into_iter()
-                .map(|(num, id)| text::page(&doc, id, num, with_figures))
-                .collect()
+            pool.map(&page_list, opts.progress.as_ref(), |num, id| {
+                text::page(&doc, id, num, with_figures)
+            })?
         }
     };
 
@@ -305,10 +351,21 @@ fn fails_quality_gate(chapters: &[Chapter]) -> bool {
     nonspace >= 50 && (letters as f32) < nonspace as f32 * 0.45
 }
 
+/// Threads recognising pages, unless the caller chose a number. The models
+/// run on rten's own pool, so more only costs memory: on a 180-page scan, 8
+/// threads took as long as 4 with 44% more memory.
+#[cfg(feature = "ocr")]
+const OCR_THREADS: usize = 4;
+
 /// Recognise every page of a scan. Checks run in epublift's order: OCR
 /// available, then the language, then the models.
 #[cfg(feature = "ocr")]
-fn scan_pages(doc: &lopdf::Document, opts: &Options) -> Result<Vec<text::Page>, Error> {
+fn scan_pages(
+    doc: &lopdf::Document,
+    pages: &[(u32, ObjectId)],
+    pool: &Pool<'_>,
+    opts: &Options,
+) -> Result<Vec<text::Page>, Error> {
     let Ocr::Models {
         detection,
         recognition,
@@ -322,30 +379,32 @@ fn scan_pages(doc: &lopdf::Document, opts: &Options) -> Result<Vec<text::Page>, 
     }
     let engine = paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
         .map_err(|e| Error::Models(e.to_string()))?;
-    Ok(doc
-        .get_pages()
-        .into_values()
-        .map(|id| {
-            // A page whose image is missing, undecodable, or fails recognition
-            // becomes an empty page. The document format will report it.
-            let lines = text::scan_image(doc, id)
-                .and_then(|fig| engine.recognise(&fig.data).ok())
-                .unwrap_or_default();
-            text::Page {
-                blocks: lines
-                    .iter()
-                    .map(|l| text::squash(&l.text))
-                    .filter(|l| !l.is_empty())
-                    .collect(),
-                ..text::Page::default()
-            }
-        })
-        .collect())
+    let pool = pool.at_most(OCR_THREADS);
+    pool.map(pages, opts.progress.as_ref(), |_, id| {
+        // A page whose image is missing, undecodable, or fails recognition
+        // becomes an empty page. The document format will report it.
+        let lines = text::scan_image(doc, id)
+            .and_then(|fig| engine.recognise(&fig.data).ok())
+            .unwrap_or_default();
+        text::Page {
+            blocks: lines
+                .iter()
+                .map(|l| text::squash(&l.text))
+                .filter(|l| !l.is_empty())
+                .collect(),
+            ..text::Page::default()
+        }
+    })
 }
 
 /// Built without OCR: a scan is refused.
 #[cfg(not(feature = "ocr"))]
-fn scan_pages(_doc: &lopdf::Document, _opts: &Options) -> Result<Vec<text::Page>, Error> {
+fn scan_pages(
+    _doc: &lopdf::Document,
+    _pages: &[(u32, ObjectId)],
+    _pool: &Pool<'_>,
+    _opts: &Options,
+) -> Result<Vec<text::Page>, Error> {
     Err(Error::ScanNeedsOcr)
 }
 
@@ -360,5 +419,7 @@ mod tests {
         assert_send::<Book>();
         assert_send::<Options>();
         assert_send::<Error>();
+        assert_send::<Cancel>();
+        assert_send::<Progress>();
     }
 }

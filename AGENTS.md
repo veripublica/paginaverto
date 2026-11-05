@@ -80,7 +80,10 @@ package is `@veripublica/paginaverto-wasm` on npm. It reads text layers only.
 pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error>;
 
 enum Input<'a> { Path(&'a Path), Bytes(&'a [u8]) }
-#[non_exhaustive] struct Options { language: Option<String>, ocr: Ocr }
+#[non_exhaustive] struct Options {
+    language: Option<String>, ocr: Ocr, limits: Limits,
+    threads: Option<usize>, cancel: Cancel, progress: Option<Progress>,
+}
 enum Ocr { Off, Models { detection: Vec<u8>, recognition: Vec<u8> } }
 #[non_exhaustive] struct Book { chapters: Vec<Chapter> }
 struct Chapter { title: Option<String>, blocks: Vec<Block> }
@@ -89,7 +92,8 @@ struct Figure { data: Vec<u8>, media_type: &'static str, ext: &'static str }
 #[non_exhaustive] enum Error {
     Open(String), ScanNeedsOcr, LanguageRequired, Models(String),
     UndecodableImages(Vec<String>), OcrFoundNothing, UndecodableFonts, NoText,
-    QualityGate, Internal(String),
+    QualityGate, LimitExceeded { what: LimitKind, limit: u64 }, Cancelled,
+    Internal(String),
 }
 ```
 
@@ -153,8 +157,10 @@ stays here.
 - Tables and equations come out as plain text.
 - A PDF made only of vector drawings cannot be read: it has no text layer and no
   image to recognise.
-- Pages are read one after another. There is no progress report, no cancel and no
-  limit on pages, streams or pixels.
+- Cancel is checked between pages, so it waits for the pages being read, and not
+  during the load or while OCR's models load.
+- The limits bound the work, but are no guarantee of a memory ceiling: a page's
+  content is parsed into many times its own size.
 - The language is required for OCR but not used yet.
 
 The one deliberate difference from epublift cli-v4.5.1, since 0.1.4: figures with
@@ -201,6 +207,15 @@ plain `cargo update`.
   split 1,222 to 16, paragraphs 1,023 to 2,308 (Mistral 2,458).
 - **epublift's earlier numbers,** on one book each: about 99.8% word overlap for
   a born-digital book, about 92% word accuracy for OCR of a clean prose scan.
+
+- **Threads, `main` after 0.1.4,** 2026-11-05, same 18 PDFs on 10 cores: chapters,
+  paragraphs and figures byte-identical to one thread and to the commit before.
+  That is at 1 and 8 threads, and at 1, 2, 4 and 8 on the two scans. Text layers
+  read 3.7 to 5.1 times faster at 8 threads on the larger books. OCR, on one small
+  scan repeated to 180 pages: 13.6 s and 363 MB at 1 thread, 10.5 s and 594 MB at
+  2, 9.3 s and 961 MB at 4, 9.3 s and 1,387 MB at 8. Hence at most 4 by default.
+  Larger page images would cost more memory; that is not measured. The default
+  limits refused none of the 18.
 
 ## Layout
 

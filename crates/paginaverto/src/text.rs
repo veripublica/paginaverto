@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Encoding, Object, ObjectId, Stream};
 
-use crate::Figure;
+use crate::parallel::Pool;
+use crate::{Error, Figure};
 
 // ---------------------------------------------------------------------------
 // The document's kind
@@ -26,20 +27,24 @@ const TEXT_FLOOR: usize = 100;
 
 /// A text layer on at least half the pages makes the document `TextLayer`.
 /// A document with no pages is a `Scan`.
-pub(crate) fn classify(doc: &Document) -> Kind {
-    let pages = doc.get_pages();
+pub(crate) fn classify(
+    doc: &Document,
+    pages: &[(u32, ObjectId)],
+    pool: &Pool<'_>,
+) -> Result<Kind, Error> {
     if pages.is_empty() {
-        return Kind::Scan;
+        return Ok(Kind::Scan);
     }
-    let with_text = pages
-        .values()
-        .filter(|&&id| shown_bytes(doc, id) >= TEXT_FLOOR)
+    let with_text = pool
+        .map(pages, None, |_, id| shown_bytes(doc, id) >= TEXT_FLOOR)?
+        .into_iter()
+        .filter(|&has_text| has_text)
         .count();
-    if with_text * 2 >= pages.len() {
+    Ok(if with_text * 2 >= pages.len() {
         Kind::TextLayer
     } else {
         Kind::Scan
-    }
+    })
 }
 
 /// Bytes of string operands to `Tj`, `'`, `"` and `TJ`, undecoded. Robust
@@ -1037,15 +1042,16 @@ fn images<'a>(doc: &'a Document, res: &'a Dictionary) -> impl Iterator<Item = &'
         })
 }
 
-fn pixel_area(s: &Stream) -> i64 {
+pub(crate) fn pixel_area(s: &Stream) -> i64 {
     let dim = |k: &[u8]| {
         s.dict
             .get(k)
             .ok()
             .and_then(|o| o.as_i64().ok())
             .unwrap_or(0)
+            .max(0)
     };
-    dim(b"Width") * dim(b"Height")
+    dim(b"Width").saturating_mul(dim(b"Height"))
 }
 
 /// The page's images as figures. JPEG2000, CCITT, JBIG2, CMYK and other
