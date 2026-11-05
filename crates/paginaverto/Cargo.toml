@@ -23,7 +23,7 @@ default = []
 ocr = ["dep:paginaverto-ocr"]
 # The command-line tool and its JSON report. Not a default: the default build
 # must never pull ocrs or rten, and the tool reads scans.
-cli = ["ocr", "dep:serde", "dep:serde_json", "dep:zip"]
+cli = ["ocr", "dep:serde", "dep:serde_json", "dep:sha2", "dep:zip"]
 
 [[bin]]
 name = "paginaverto"
@@ -37,5 +37,6 @@ regex.workspace = true
 paginaverto-ocr = { workspace = true, optional = true }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.145", optional = true }
+sha2 = { version = "0.11.1", optional = true }
 # The family shares one zip major; the "deflate" feature is pure Rust.
 zip = { version = "9.3.0", default-features = false, features = ["deflate"], optional = true }

@@ -759,16 +759,6 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
     // Top to bottom. Stable, so equal y keeps stream order.
     runs.sort_by(|a, b| b.y.total_cmp(&a.y));
 
-    struct Line {
-        y: f32,
-        x: f32,
-        end: f32,
-        font: f32,
-        /// The top of the line's highest glyphs and the bottom of its lowest.
-        top: f32,
-        bottom: f32,
-        text: Marked,
-    }
     let mut lines: Vec<Line> = Vec::new();
     let mut i = 0;
     while i < runs.len() {
@@ -821,6 +811,35 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
         });
     }
 
+    join_lines(
+        &lines,
+        |[x0, y0, x1, y1]| frame.place(page, x0, y0, x1, y1),
+        |x| x,
+    )
+}
+
+/// A line of text with its geometry. `y` grows upward.
+struct Line {
+    y: f32,
+    x: f32,
+    end: f32,
+    font: f32,
+    /// The top of the line's highest glyphs and the bottom of its lowest.
+    top: f32,
+    bottom: f32,
+    text: Marked,
+}
+
+/// Lines to paragraph blocks: a new block at a large vertical gap, a change of
+/// font size or of capitals, a first-line indent, or a line that goes back up
+/// the page (a new column). `place` turns a block's left, bottom, right and top
+/// into a box. `align` readies an `x` for finding the left edge, where exact
+/// positions would not line up.
+fn join_lines(
+    lines: &[Line],
+    place: impl Fn([f32; 4]) -> Option<BlockBox>,
+    align: impl Fn(f32) -> f32,
+) -> Vec<TextBlock> {
     let mut gaps: Vec<f32> = lines
         .windows(2)
         .map(|w| w[0].y - w[1].y)
@@ -828,7 +847,7 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
         .collect();
     gaps.sort_by(f32::total_cmp);
     let median_gap = gaps.get(gaps.len() / 2).copied().unwrap_or(0.0);
-    let left = body_left(lines.iter().map(|l| l.x));
+    let left = body_left(lines.iter().map(|l| align(l.x)));
     let right = lines.iter().map(|l| l.end).fold(f32::MIN, f32::max);
 
     let mut blocks = Vec::new();
@@ -836,7 +855,7 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
     // Left, bottom, right, top of what `cur` holds.
     let mut span = [f32::INFINITY, f32::INFINITY, f32::MIN, f32::MIN];
     let mut prev: Option<&Line> = None;
-    for l in &lines {
+    for l in lines {
         let indented = l.x > left + l.font;
         // Lines indented alike are one block (a quotation) while the one
         // before runs on to the margin; a short one ended its paragraph.
@@ -846,15 +865,15 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
         let starts_lower = l.text.text.chars().next().is_some_and(char::is_lowercase);
         let new_block = cur.text.is_empty()
             || prev.is_some_and(|p| median_gap > 0.0 && p.y - l.y > median_gap * 1.6)
+            || prev.is_some_and(|p| l.y > p.y + l.font)
             || prev.is_some_and(|p| (p.font - l.font).abs() > l.font.max(p.font) * 0.15)
             || prev.is_some_and(|p| mostly_caps(&p.text.text) != mostly_caps(&l.text.text))
             || (indented && !continues_indent && !starts_lower);
         if new_block {
             if !cur.text.is_empty() {
-                let [x0, y0, x1, y1] = span;
                 blocks.push(TextBlock {
                     text: std::mem::take(&mut cur),
-                    place: frame.place(page, x0, y0, x1, y1),
+                    place: place(span),
                 });
             }
             span = [f32::INFINITY, f32::INFINITY, f32::MIN, f32::MIN];
@@ -869,13 +888,64 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
         prev = Some(l);
     }
     if !cur.text.is_empty() {
-        let [x0, y0, x1, y1] = span;
         blocks.push(TextBlock {
             text: cur,
-            place: frame.place(page, x0, y0, x1, y1),
+            place: place(span),
         });
     }
     blocks
+}
+
+/// An OCR line's text and its box in pixels: left, top, width, height.
+pub(crate) type OcrLine = (String, (f32, f32, f32, f32));
+
+/// OCR's lines as paragraph blocks. `lines` are in the order OCR gives them, each
+/// with its box in the page image's pixels: left, top, width, height. A box's
+/// height follows the letters a line happens to hold, so every line gets the
+/// page's median as its font size; positions vary by a few pixels, so the left
+/// edge is found to within half of it.
+#[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+pub(crate) fn blocks_from_ocr(
+    lines: &[OcrLine],
+    page: u32,
+    frame: &Frame,
+    image: (i64, i64),
+) -> Vec<TextBlock> {
+    let mut heights: Vec<f32> = lines.iter().map(|(_, b)| b.3).collect();
+    heights.sort_by(f32::total_cmp);
+    let font = heights
+        .get(heights.len() / 2)
+        .copied()
+        .unwrap_or(1.0)
+        .max(1.0);
+    let mut joined: Vec<Line> = Vec::new();
+    for (text, (x, y, w, h)) in lines {
+        let line = Line {
+            y: -(y + h),
+            x: *x,
+            end: x + w,
+            font,
+            top: -y,
+            bottom: -(y + h),
+            text: Marked::plain(text.clone()),
+        };
+        // OCR can see one row of text as two lines.
+        match joined.last_mut() {
+            Some(row) if (row.y - line.y).abs() < font * 0.5 && line.x > row.x => {
+                row.text.join(&line.text);
+                row.end = row.end.max(line.end);
+                row.top = row.top.max(line.top);
+                row.bottom = row.bottom.min(line.bottom);
+            }
+            _ => joined.push(line),
+        }
+    }
+    let step = font / 2.0;
+    join_lines(
+        &joined,
+        |[x0, y0, x1, y1]| frame.place_pixels(page, image, (x0, -y1, x1 - x0, y1 - y0)),
+        |x| (x / step).round() * step,
+    )
 }
 
 /// How far above and below the baseline a line's box reaches, in font sizes.
@@ -1644,6 +1714,81 @@ endcmap";
         assert_eq!(
             (map[&1].as_str(), map[&2].as_str(), code_len),
             ("a", "b", 1)
+        );
+    }
+
+    fn ocr_paragraphs(lines: &[(&str, f32, f32)]) -> Vec<String> {
+        let lines: Vec<_> = lines
+            .iter()
+            .map(|(t, x, y)| (t.to_string(), (*x, *y, 900.0, 30.0)))
+            .collect();
+        let frame = Frame {
+            edges: Some([0.0, 0.0, 595.0, 842.0]),
+            turn: 0,
+        };
+        blocks_from_ocr(&lines, 1, &frame, (1654, 2339))
+            .into_iter()
+            .map(|b| b.text.text)
+            .collect()
+    }
+
+    #[test]
+    fn ocr_lines_join_into_paragraphs_at_an_indent_or_a_gap() {
+        // Left edges a few pixels apart, as OCR gives them.
+        let got = ocr_paragraphs(&[
+            ("First line of it", 262.0, 200.0),
+            ("goes on here", 200.0, 244.0),
+            ("And ends here too", 203.0, 288.0),
+            ("Second one starts", 261.0, 332.0),
+            ("and ends", 199.0, 376.0),
+            ("After a gap", 201.0, 520.0),
+        ]);
+        assert_eq!(
+            got,
+            [
+                "First line of it goes on here And ends here too",
+                "Second one starts and ends",
+                "After a gap",
+            ]
+        );
+    }
+
+    #[test]
+    fn two_ocr_lines_on_one_row_are_one_line() {
+        let got = ocr_paragraphs(&[
+            ("First line", 200.0, 200.0),
+            ("in two pieces", 700.0, 203.0),
+            ("and on", 200.0, 244.0),
+        ]);
+        assert_eq!(got, ["First line in two pieces and on"]);
+    }
+
+    #[test]
+    fn ocr_lines_going_back_up_the_page_are_a_new_column() {
+        let got = ocr_paragraphs(&[
+            ("End of a column", 200.0, 800.0),
+            ("Top of the next", 200.0, 200.0),
+            ("and more", 200.0, 244.0),
+        ]);
+        assert_eq!(got, ["End of a column", "Top of the next and more"]);
+    }
+
+    #[test]
+    fn an_ocr_paragraph_has_one_box_around_its_lines() {
+        let frame = Frame {
+            edges: Some([0.0, 0.0, 100.0, 200.0]),
+            turn: 0,
+        };
+        let lines = [
+            ("one".to_string(), (10.0, 20.0, 50.0, 10.0)),
+            ("two".to_string(), (10.0, 34.0, 30.0, 10.0)),
+        ];
+        let got = blocks_from_ocr(&lines, 3, &frame, (200, 400));
+        assert_eq!(got.len(), 1);
+        let b = got[0].place.unwrap();
+        assert_eq!(
+            (b.page, b.x, b.y, b.width, b.height),
+            (3, 5.0, 10.0, 25.0, 12.0)
         );
     }
 

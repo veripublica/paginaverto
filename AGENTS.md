@@ -235,8 +235,10 @@ paginaverto inspect -i a.pdf -i b.pdf --format json
 
 `convert` takes one input and writes a zip of `document.json` and `figures/`:
 `-o`, `-f`, `--language`, `--ocr-models <DIR>` (the `.onnx` files, else the
-`.rten`), `--threads`, `--format`. It never replaces a file without `-f`, never
-writes over its input, and a partial file never takes the output's name.
+`.rten`, refused unless their SHA-256 matches), `--threads`, `--format`. It never
+replaces a file without `-f`, never writes over its input, and a partial file
+never takes the output's name. On a terminal, stderr counts the pages; a pipe or
+log stays clean.
 
 Exit `0`: the document was written. `1`: written, but a scan lost text on a page.
 `2`: could not run, or the PDF was refused, and nothing was written.
@@ -334,8 +336,12 @@ plain `cargo update`.
     | | Arial clean | Arial noisy | Times clean | Times noisy |
     | --- | ---: | ---: | ---: | ---: |
     | English | 1.20% | 3.70% | 1.85% | 5.46% |
-    | Turkish | 13.04% | 16.01% | 14.09% | 17.07% |
-    | Turkish, letters folded to ASCII | 7.38% | 10.74% | 8.72% | 11.98% |
+    | Turkish | 13.04% | 16.01% | 14.09% | 17.26% |
+    | Turkish, letters folded to ASCII | 7.38% | 10.74% | 8.72% | 12.18% |
+
+    Paragraphs found, of the 6 in each text: 6 on every clean page, up from 12.
+    Noisy pages give 16 to 19, down from 22 to 27: the lines join correctly, and the
+    rest are stray letters OCR sees in the noise.
 
     The model's ASCII alphabet costs Turkish about 5.5 points. The other part of
     the gap to English (about 6 points on clean pages) is the model reading
@@ -356,6 +362,11 @@ plain `cargo update`.
   5 to 6 (6 entries), 9 to 13 (12), 9 to 45 (44). They lost no letters. Of those 62
   entries, 31 were found on their page or the next, 31 are titles only the outline
   holds.
+- **OCR paragraphs, `main` after 0.1.4,** 2026-11-05: on the two scans read by OCR,
+  357 to 278 paragraphs on one with few letters on its pages, 26 to 5 on the other,
+  with the same letters on that one. The first keeps 61 more letters of 543; a short
+  line that now joins a paragraph is no longer dropped as a head or page number,
+  which is the likely reason, not checked. The other 15 PDFs that read are unchanged.
 - **Italics, `main` after 0.1.4,** 2026-11-05, on one Turkish book against Mistral's
   export, which is not ground truth. Of Mistral's 107 italic spans counted here, 102
   are italic in ours and 105 are in our text at all. Ours has 169 italic runs, 100 of

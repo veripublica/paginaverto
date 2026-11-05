@@ -60,7 +60,8 @@ OPTIONS:
                             recorded as the document's language. Required for a
                             scan. Without it, the PDF's own /Lang is recorded.
         --ocr-models <DIR>  The folder holding the OCR model files; the tool
-                            never downloads them. Without it, a scan is refused.
+                            never downloads them, and checks them against their
+                            published SHA-256. Without it, a scan is refused.
         --threads <N>       How many threads do the work, 1 or more. The output
                             never depends on it. Default: every core but two, at
                             most four for OCR.

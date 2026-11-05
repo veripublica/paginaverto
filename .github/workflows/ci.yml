@@ -47,6 +47,11 @@ jobs:
           rustup target add wasm32-unknown-unknown
           cargo build -p paginaverto-wasm --target wasm32-unknown-unknown --locked
 
+      # Out of the workspace, so nothing above builds it, and a change to the
+      # library's API can break it unseen.
+      - name: The OCR accuracy tool still compiles
+        run: cargo check --manifest-path tools/ocr-accuracy/Cargo.toml --locked
+
       - name: Docs (rustdoc, warnings denied)
         env:
           RUSTDOCFLAGS: -D warnings

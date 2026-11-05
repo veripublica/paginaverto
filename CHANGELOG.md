@@ -67,6 +67,9 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   books whose subheadings had each become a chapter. Measured by count only, since
   these books have no reference for their chapters. PDFs with neither read as before.
 - **A scan refused for lack of OCR no longer says OCR is coming later.** It is here.
+- **OCR's lines join into paragraphs,** by their gaps and first-line indents, instead
+  of each line being a paragraph: 6 paragraphs of 6 on clean generated pages, where
+  there were 12.
 - **Pages are read in parallel,** on every core but two (`Options::threads`). The
   output does not depend on the thread count: byte-identical on 18 PDFs at 1 and 8
   threads. Text layers read about 4 times faster on 10 cores. OCR uses at most 4

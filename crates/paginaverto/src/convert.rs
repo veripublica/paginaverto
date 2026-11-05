@@ -2,15 +2,16 @@
 //! `document.json` and `figures/`.
 
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use paginaverto::{
-    Block, BlockBox, BlockKind, Document, Error, Input, MODELS, ONNX_MODELS, Ocr, Options,
-    OutlineEntry, Page, PageProblem, Run, SCHEMA_VERSION, TextSource,
+    Block, BlockBox, BlockKind, Document, Error, Input, MODELS, ModelFile, ONNX_MODELS, Ocr,
+    Options, OutlineEntry, Page, PageDone, PageProblem, Progress, Run, SCHEMA_VERSION, TextSource,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use zip::CompressionMethod;
 use zip::write::{SimpleFileOptions, ZipWriter};
 
@@ -107,11 +108,22 @@ fn convert(job: &Job, output: &Path) -> Result<Document, String> {
     if let Some(dir) = &job.models {
         options.ocr = load_models(Path::new(dir))?;
     }
-    let doc =
-        paginaverto::read(Input::Path(job.input.as_ref()), &options).map_err(|e| match e {
-            Error::ScanNeedsOcr => format!("{e}; give --ocr-models <DIR> and --language <TAG>"),
-            e => e.to_string(),
-        })?;
+    // A counter for a person watching, on stderr (§5). Never in a log or a pipe.
+    let counting = !job.json && io::stderr().is_terminal();
+    if counting {
+        options.progress = Some(Progress::new(|done: PageDone| {
+            eprint!("\rpage {} of {}", done.done, done.total);
+        }));
+    }
+    let result = paginaverto::read(Input::Path(job.input.as_ref()), &options);
+    if counting {
+        // Back to the start of the line, and clear it.
+        eprint!("\r\x1b[K");
+    }
+    let doc = result.map_err(|e| match e {
+        Error::ScanNeedsOcr => format!("{e}; give --ocr-models <DIR> and --language <TAG>"),
+        e => e.to_string(),
+    })?;
     write_atomically(output, &doc)
         .map_err(|e| format!("could not write {}: {e}", output.display()))?;
     Ok(doc)
@@ -138,25 +150,46 @@ fn check_output(input: &Path, output: &Path, force: bool) -> Result<(), String> 
     Ok(())
 }
 
-/// The folder's two model files, ONNX if it has them, else RTen.
+/// The folder's two model files, ONNX if it has them, else RTen, checked against
+/// their published SHA-256: a damaged model reads badly without saying so.
 fn load_models(dir: &Path) -> Result<Ocr, String> {
     let read = |which: usize| {
-        [ONNX_MODELS[which], MODELS[which]]
+        let files = [ONNX_MODELS[which], MODELS[which]];
+        let found = files
             .iter()
-            .find_map(|file| fs::read(dir.join(file.name)).ok())
-            .ok_or_else(|| {
-                format!(
-                    "no {} or {} in {}",
-                    ONNX_MODELS[which].name,
-                    MODELS[which].name,
-                    dir.display()
-                )
-            })
+            .find_map(|file| Some((file, fs::read(dir.join(file.name)).ok()?)));
+        let (file, bytes) = found.ok_or_else(|| {
+            format!(
+                "no {} or {} in {}",
+                files[0].name,
+                files[1].name,
+                dir.display()
+            )
+        })?;
+        if sha256_hex(&bytes) != file.sha256 {
+            return Err(not_the_model(file, dir));
+        }
+        Ok(bytes)
     };
     Ok(Ocr::Models {
         detection: read(0)?,
         recognition: read(1)?,
     })
+}
+
+fn not_the_model(file: &ModelFile, dir: &Path) -> String {
+    format!(
+        "{} in {} is not the published model: its SHA-256 differs",
+        file.name,
+        dir.display()
+    )
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A partial file never takes the output's name.

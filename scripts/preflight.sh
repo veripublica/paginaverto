@@ -101,6 +101,7 @@ for feat in "" "paginaverto/ocr" "paginaverto/cli"; do
     bad "$label"; grep -E '^test .* FAILED|^failures:|panicked' <<< "$out" | head -15 | sed 's/^/        /'
   fi
 done
+check "the OCR accuracy tool compiles" cargo check --manifest-path tools/ocr-accuracy/Cargo.toml --locked
 check "cargo doc (-D warnings)" env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --features paginaverto/ocr
 if cargo tree -p paginaverto -p paginaverto-wasm -e normal --locked | grep -qE '(ocrs|rten) v'; then
   bad "the default build pulls ocrs/rten"

@@ -362,19 +362,15 @@ fn scan_pages(
             page.problems.push(PageProblem::OcrFailed);
             return page;
         };
-        let pixels = text::pixels(image);
-        for line in &lines {
-            let clean = text::squash(&line.text);
-            if !clean.is_empty() {
-                let place = line.bbox.and_then(|r| {
-                    frame.place_pixels(number, pixels, (r.x, r.y, r.width, r.height))
-                });
-                page.blocks.push(text::TextBlock {
-                    place,
-                    ..text::TextBlock::plain(clean)
-                });
-            }
-        }
+        let boxed: Vec<_> = lines
+            .iter()
+            .filter_map(|line| {
+                let clean = text::squash(&line.text);
+                let r = line.bbox?;
+                (!clean.is_empty()).then_some((clean, (r.x, r.y, r.width, r.height)))
+            })
+            .collect();
+        page.blocks = text::blocks_from_ocr(&boxed, number, &frame, text::pixels(image));
         if !page.blocks.is_empty() {
             page.source = TextSource::Ocr;
         }

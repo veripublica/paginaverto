@@ -6,7 +6,8 @@
 //! The models dir holds `text-detection.{onnx,rten}` and
 //! `text-recognition.{onnx,rten}`. Prints the character error rate per language,
 //! font and page quality, exact and with the Turkish letters folded to ASCII,
-//! which shows what the ASCII-only model loses to its alphabet alone.
+//! which shows what the ASCII-only model loses to its alphabet alone. Also the
+//! paragraphs found against the corpus's own.
 
 use std::path::Path;
 
@@ -14,7 +15,7 @@ use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
 use image::{GrayImage, Luma};
 use lopdf::content::{Content, Operation};
 use lopdf::{Document, Object, Stream, dictionary};
-use paginaverto::{Block, Input, Ocr, Options, read};
+use paginaverto::{Input, Ocr, Options, read};
 
 const EN: &str = include_str!("../../../crates/paginaverto/tests/corpus/en.txt");
 const TR: &str = include_str!("../../../crates/paginaverto/tests/corpus/tr.txt");
@@ -236,22 +237,16 @@ fn main() {
         for (lang, corpus) in [("en", EN), ("tr", TR)] {
             for quality in [Quality::Clean, Quality::Noisy] {
                 let pdf = scan_pdf(&render(corpus, &font, quality));
-                let got = match read(Input::Bytes(&pdf), &opts) {
-                    Ok(book) => {
+                let (got, found) = match read(Input::Bytes(&pdf), &opts) {
+                    Ok(doc) => {
                         let mut text = String::new();
-                        for c in &book.chapters {
-                            if let Some(t) = &c.title {
-                                text.push_str(t);
-                                text.push(' ');
-                            }
-                            for b in &c.blocks {
-                                if let Block::Paragraph(p) = b {
-                                    text.push_str(p);
-                                    text.push(' ');
-                                }
-                            }
+                        let mut found = 0;
+                        for b in doc.blocks.iter().filter(|b| !b.runs().is_empty()) {
+                            text.push_str(&b.text());
+                            text.push(' ');
+                            found += 1;
                         }
-                        squash(&text)
+                        (squash(&text), found)
                     }
                     Err(e) => {
                         println!("{lang} {name} {quality:?}: refused: {e}");
@@ -260,9 +255,10 @@ fn main() {
                 };
                 let want = squash(corpus);
                 println!(
-                    "{lang} {name} {quality:?}: CER {:.2}%, folded {:.2}%",
+                    "{lang} {name} {quality:?}: CER {:.2}%, folded {:.2}%, paragraphs {found} of {}",
                     cer(&got, &want),
                     cer(&fold_turkish(&got), &fold_turkish(&want)),
+                    corpus.split("\n\n").filter(|p| !p.trim().is_empty()).count(),
                 );
             }
         }

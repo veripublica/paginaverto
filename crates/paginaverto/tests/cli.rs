@@ -352,6 +352,35 @@ fn convert_names_a_folder_without_models() {
 }
 
 #[test]
+fn convert_refuses_a_model_file_that_is_not_the_published_one() {
+    let (input, output) = convert_paths("convert-sha", &[Kind::Text]);
+    let dir = input.with_extension("models");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("text-detection.onnx"), b"not a model").unwrap();
+    std::fs::write(dir.join("text-recognition.onnx"), b"not a model").unwrap();
+    let out = tool(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--ocr-models",
+        dir.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(message.contains("SHA-256"), "{message}");
+    assert!(!output.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn no_counter_goes_to_a_pipe() {
+    let (input, output) = convert_paths("convert-quiet", &[Kind::Text, Kind::Text]);
+    let out = tool(&["-i", input.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(out.stderr, b"", "stderr is not a terminal here");
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
 fn a_page_image_in_a_pdf_with_text_is_a_warning_with_the_document_written() {
     let (input, output) = convert_paths(
         "convert-image",
