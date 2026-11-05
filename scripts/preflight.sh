@@ -54,6 +54,10 @@ for c in paginaverto paginaverto-ocr paginaverto-wasm; do
     cmp -s "$f" "crates/$c/$f" && ok "crates/$c/$f matches $f" || bad "crates/$c/$f differs from $f (re-copy it)"
   done
 done
+# paginaverto-ocr builds in PaddleOCR's character list, so it ships the notice.
+f=THIRD-PARTY-NOTICES.md
+cmp -s "$f" "crates/paginaverto-ocr/$f" && ok "crates/paginaverto-ocr/$f matches $f" \
+  || bad "crates/paginaverto-ocr/$f differs from $f (re-copy it)"
 
 # ------------------------------------------------------------------ tree
 if [ -z "$(git status --porcelain)" ]; then ok "working tree clean"

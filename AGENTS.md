@@ -8,7 +8,7 @@ Figures below name the versions they were measured on. Current version: 0.1.4.
 
 ## Scope
 
-paginaverto reads PDFs and turns them into a structured document. It ships as a
+paginaverto reads PDFs and page images and turns them into a structured document. It ships as a
 Rust library (crates `paginaverto` and `paginaverto-ocr`) and a WebAssembly
 package (`@veripublica/paginaverto-wasm`), released together under one version.
 It also ships a CLI (below), with binaries for eight targets. The web page at
@@ -21,14 +21,18 @@ From 0.2.0 the output changes, and every change is measured
 ([Measurements](#measurements)). epublift builds on it.
 
 What it reads into a `Document`, metadata, pages, and headings, paragraphs and
-figures in reading order, from three kinds of PDF:
+figures in reading order, from three kinds of PDF, and from page images:
 
 1. **Born-digital,** with a text layer. Simple fonts and composite (Type0/CID)
    fonts with a `/ToUnicode` map are read. Word spaces come from the fonts' real
    glyph widths.
 2. **A scan with an embedded OCR text layer.** That layer is reused as it is.
-3. **A pure scan.** The page images go through
-   [ocrs](https://github.com/robertknight/ocrs), behind the `ocr` feature.
+3. **A pure scan.** The page images go through OCR, behind the `ocr` feature:
+   [ocrs](https://github.com/robertknight/ocrs) finds the lines, and
+   PaddlePaddle's PP-OCRv5 Latin model reads them. Every image format a PDF
+   holds decodes, JBIG2, JPEG 2000 and CCITT fax included.
+4. **Page images:** a PNG, JPEG or TIFF file, or a folder of them, read the
+   same way.
 
 It then removes running heads and feet and page numbers, joins words split by a
 line-break hyphen, and finds the headings. Chapters start where the PDF's own
@@ -38,7 +42,7 @@ table of contents, if the book has one, tells the chapters from the subheadings.
 
 Where it is going: lists, captions and footnotes linked to where they are
 referenced, figures at their positions, language and reading direction on each
-part, and page images as input. The format already has room for them.
+part, and alphabets beyond Latin. The format already has room for them.
 
 Rules the code follows:
 
@@ -114,9 +118,9 @@ struct Figure { data: Vec<u8>, media_type: &'static str, ext: &'static str }
 }
 ```
 
-A scan's checks come in this order: images no build can decode yet
-(`UndecodableImages`: JBIG2, JPEG 2000, CCITT fax, when every page's image is one
-of them), then OCR off, then language missing, then models.
+A scan's checks come in this order: images that fail to decode
+(`UndecodableImages`, naming their formats, when every page's image fails),
+then OCR off, then language missing, then models.
 
 ```rust
 use paginaverto::{Input, Options, read};
@@ -332,11 +336,21 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 
 ## Limits
 
-- OCR reads ASCII only. The ocrs 0.13.1 model is trained on ASCII text, so it
-  cannot produce ç ğ ı İ ö ş ü, other accented letters or non-Latin scripts. The
-  text-layer path has no such limit.
+- OCR reads the Latin alphabet only, with the Latin model; with ocrs's own
+  model, ASCII only. Other alphabets need models paginaverto does not take yet.
+  The text-layer path has no such limit. Only Turkish and English are measured.
+- OCR misses about one İ in three on the one Turkish scan measured, mostly
+  reading it as I.
+- OCR lines are cropped straight, so a strongly slanted page reads worse:
+  following the slant lost more than it gained on the scan measured.
+- On noisy pages, OCR's paragraphs can run together: 4 or 5 of 6 on three of
+  the eight generated pages. The line boxes reach into the noise and hide the
+  first-line indents.
+- OCR with the Latin model takes about twice as long as with ocrs's: 261 s for a
+  292-page scan on 10 cores.
 - Figures are placed after their page's text, not at their exact position.
-  JPEG 2000, CCITT, JBIG2 and CMYK images are skipped.
+  Indexed-colour and CMYK raw images are skipped, and decoded images under
+  4,096 pixels (marks, not pictures).
 - A document classified as a scan goes through OCR on every page, and scans yield
   no figures.
 - Tables and equations come out as plain text.
@@ -347,6 +361,8 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 - The limits bound the work, but are no guarantee of a memory ceiling: a page's
   content is parsed into many times its own size.
 - The language is required for OCR, and recorded, but OCR does not use it.
+- A page image states its resolution, or it is taken at 300 dpi; the page size in
+  points follows from that.
 - Chapters from a printed table of contents and from the look of the text are
   counted, not checked against a reference. See [Measurements](#measurements).
 - An outline's chapter that is found on neither its page nor the next starts at
@@ -360,7 +376,9 @@ filters undone. epublift's import emitted the still-deflated bytes under an
 or the result is not a JPEG, there is no figure.
 
 The engines are pinned exactly (lopdf 0.45.0, ocrs 0.13.1, rten 0.26.0, image
-0.25.10), because their behaviour is part of the output. They have not moved in 0.2.0; each
+0.25.10, hayro-jbig2 0.4.0, hayro-jpeg2000 0.5.0, hayro-ccitt 0.5.0, tiff
+0.11.3), because their behaviour is part of the output. lopdf, ocrs, rten and
+image have not moved since 0.1; each
 move changes the output, so each will be measured on its own.
 `Cargo.lock` matches epublift's versions package for package, so do not run a
 plain `cargo update`.
@@ -397,6 +415,41 @@ plain `cargo update`.
     The model's ASCII alphabet costs Turkish about 5.5 points. The other part of
     the gap to English (about 6 points on clean pages) is the model reading
     Turkish words badly even without those letters.
+- **Public accuracy set, OCR with the Latin model,** 2026-11-05, same pages,
+  CER:
+
+  | | Arial clean | Arial noisy | Times clean | Times noisy |
+  | --- | ---: | ---: | ---: | ---: |
+  | English | 0.28% | 0.19% | 0.37% | 0.28% |
+  | Turkish | 0.48% | 0.58% | 0.67% | 0.48% |
+  | Turkish, letters folded to ASCII | 0.19% | 0.48% | 0.48% | 0.29% |
+
+  Paragraphs of 6: 6 on every clean page; 4, 6, 5 and 5 on the noisy ones. The
+  same pages as a folder of PNGs and as one multi-page TIFF give the same text as
+  the PDF.
+- **One Turkish scan with OCR,** 2026-11-05, 292 pages of JBIG2 and JPEG 2000,
+  against the publisher's EPUB of the book (65,127 words, perhaps another
+  edition). Share of its words found, counted as a bag of words; in brackets,
+  the share of ours that are in it:
+
+  | | Found | (Ours in it) |
+  | --- | ---: | ---: |
+  | ocrs's model | 55.70% | (48.60%) |
+  | Latin model, crop with a margin of 0.1 line | 90.38% | (93.94%) |
+  | Latin model, no margin (as shipped) | 94.30% | (95.38%) |
+  | Latin model, margin of 0.25 line | 38.07% | (66.01%) |
+  | Latin model, crop turned to the line's slant | 69.02% | (91.61%) |
+
+  The reference has 35,094 of ş ğ ı ç ö ü and 1,059 İ; ours 34,165 and 712.
+  Paragraphs 2,157, against the reference's 2,061. Without flattening the
+  lighting, 90.27% instead of 90.38%. 0.2.0 refused this scan.
+- **The 18 PDFs, 0.3 against 0.2.0,** 2026-11-05: 7 byte-identical. 5 with a
+  text layer differ only in 29 page problems, now `image_not_read` instead of
+  `undecodable_images`. 2 gained figures from JBIG2 images, 23 to 170 and 9 to
+  37, with their text the same. The JBIG2/JPX scan reads (above). The 2-page
+  English scan: 1,368 to 1,373 characters, equally word-like. The 15-page
+  Turkish scan, whose pages hold little text, gives 976 to 572 characters, a fifth
+  of them word-like either way.
 - **Text path on one Turkish book,** 0.1.4 against 0.2.0, against a
   Mistral OCR export (not ground truth): words matching 95.80% to 98.85%, wrongly
   split 1,222 to 16, paragraphs 1,023 to 2,308 (Mistral 2,458).
@@ -428,7 +481,7 @@ plain `cargo update`.
 - **`inspect`, 0.2.0,** 2026-11-05, same 18 PDFs: all read. The one
   known JBIG2 scan reports 292 of 292 pages undecodable, exit `1`. In 7 of the PDFs
   with text, 1 to 23 image-only pages are in a format that cannot be decoded; those
-  report warnings, exit `0`.
+  report warnings, exit `0`. Since 0.3 those images decode.
 - **Threads, 0.2.0,** 2026-11-05, same 18 PDFs on 10 cores: chapters,
   paragraphs and figures byte-identical to one thread and to the commit before.
   That is at 1 and 8 threads, and at 1, 2, 4 and 8 on the two scans. Text layers

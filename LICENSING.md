@@ -61,6 +61,11 @@ license, which this project states where it uses the model.
   **CC BY-SA 4.0**, which allows commercial use. If you redistribute them,
   give the attribution their authors ask for. If you change a model and
   distribute it, the changed model is also CC BY-SA 4.0.
+- The recognition model paginaverto prefers, PaddlePaddle's **PP-OCRv5 Latin**
+  model, is licensed under **Apache-2.0**, which allows commercial use. Its
+  list of characters is built into `paginaverto-ocr` and the command-line tool;
+  [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md) says where it comes from
+  and carries the licence.
 - If this project ever trains a model of its own, this page will name the
   data it was trained on and the license that follows from that.
 

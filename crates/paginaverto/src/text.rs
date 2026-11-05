@@ -295,7 +295,7 @@ pub(crate) fn page(
         }
     };
     let figures = if with_figures {
-        figures(doc, page_id)
+        figures(doc, page_id, max_image_pixels)
     } else {
         Vec::new()
     };
@@ -1500,11 +1500,15 @@ pub(crate) fn pixel_area(s: &Stream) -> i64 {
     dim(b"Width").saturating_mul(dim(b"Height"))
 }
 
-/// The page's images as figures. JPEG2000, CCITT, JBIG2, CMYK and other
-/// images without an EPUB-core, pure-Rust path are skipped.
-fn figures(doc: &Document, page_id: ObjectId) -> Vec<Figure> {
+/// The page's images as figures. Indexed-colour and CMYK raw images are
+/// skipped.
+fn figures(doc: &Document, page_id: ObjectId, max_image_pixels: u64) -> Vec<Figure> {
     resources(doc, page_id)
-        .map(|res| images(doc, res).filter_map(|s| figure(doc, s)).collect())
+        .map(|res| {
+            images(doc, res)
+                .filter_map(|s| figure(doc, s, max_image_pixels))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1567,17 +1571,40 @@ pub(crate) fn last_filter(stream: &Stream) -> Option<&[u8]> {
 }
 
 /// An image stream as embeddable bytes: a DCT stream verbatim as JPEG; raw
-/// 8-bit gray or RGB pixels as PNG; anything else none.
-fn figure(doc: &Document, stream: &Stream) -> Option<Figure> {
+/// 8-bit gray or RGB pixels as PNG; JBIG2, CCITT, JPEG 2000 and gray at 1, 2
+/// or 4 bits decoded to PNG; anything else none.
+fn figure(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figure> {
     match last_filter(stream) {
         Some(b"DCTDecode") => Some(Figure {
             data: jpeg_bytes(doc, stream)?,
             media_type: "image/jpeg",
             ext: "jpg",
         }),
-        Some(b"FlateDecode") | Some(b"LZWDecode") | None => raw_to_png(doc, stream),
-        _ => None,
+        Some(b"FlateDecode") | Some(b"LZWDecode") | None => {
+            raw_to_png(doc, stream).or_else(|| decoded_png(doc, stream, max_image_pixels))
+        }
+        _ => decoded_png(doc, stream, max_image_pixels),
     }
+}
+
+/// Below this many pixels, a newly decodable image is a mark, not a picture: in
+/// two of the 18 PDFs measured, 293 fax images averaged about 22 by 22 pixels.
+const MIN_DECODED_FIGURE_PIXELS: u64 = 4096;
+
+fn decoded_png(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figure> {
+    let image = crate::decode::figure_pixels(doc, stream, max_image_pixels)?;
+    if u64::from(image.width()) * u64::from(image.height()) < MIN_DECODED_FIGURE_PIXELS {
+        return None;
+    }
+    let mut png = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(Figure {
+        data: png,
+        media_type: "image/png",
+        ext: "png",
+    })
 }
 
 /// The JPEG inside a stream whose last filter is DCTDecode. With DCTDecode

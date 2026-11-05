@@ -257,6 +257,62 @@ fn jpx(doc: &Document, stream: &Stream, max_pixels: u64) -> Option<Gray> {
     Gray::new(width, height, pixels, max_pixels)
 }
 
+/// A figure in a format the plain figure path skips, as pixels to embed: the
+/// bilevel formats (JBIG2, CCITT, 1-bit and masks) and gray at 2 or 4 bits as
+/// gray, exactly; JPEG 2000 in its own colours. Indexed colour and CMYK raw
+/// images stay skipped.
+pub(crate) fn figure_pixels(
+    doc: &Document,
+    stream: &Stream,
+    max_pixels: u64,
+) -> Option<image::DynamicImage> {
+    let as_gray = |g: Gray| {
+        image::GrayImage::from_raw(g.width, g.height, g.pixels).map(image::DynamicImage::ImageLuma8)
+    };
+    match last_filter(stream) {
+        Some(b"JBIG2Decode") | Some(b"CCITTFaxDecode") => as_gray(gray(doc, stream, max_pixels)?),
+        Some(b"JPXDecode") => jpx_colour(doc, stream, max_pixels),
+        Some(b"DCTDecode") => None,
+        _ => match space(doc, &stream.dict)? {
+            Space::Direct(1) => as_gray(gray(doc, stream, max_pixels)?),
+            _ => None,
+        },
+    }
+}
+
+fn jpx_colour(doc: &Document, stream: &Stream, max_pixels: u64) -> Option<image::DynamicImage> {
+    let data = before_last_filter(doc, stream)?;
+    let image =
+        hayro_jpeg2000::Image::new(&data, &hayro_jpeg2000::DecodeSettings::default()).ok()?;
+    let (width, height) = (image.width(), image.height());
+    fits(width, height, max_pixels)?;
+    let colors = usize::from(image.color_space().num_channels());
+    let step = colors + usize::from(image.has_alpha());
+    let mut ctx = hayro_jpeg2000::DecoderContext::default();
+    let samples = image.decode(&mut ctx).ok()?.data_u8();
+    let pixels = samples.chunks_exact(step);
+    match colors {
+        1 => {
+            let gray: Vec<u8> = pixels.map(|p| p[0]).collect();
+            image::GrayImage::from_raw(width, height, gray).map(image::DynamicImage::ImageLuma8)
+        }
+        3 | 4 => {
+            let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+            for p in pixels {
+                if colors == 3 {
+                    rgb.extend_from_slice(&p[..3]);
+                } else {
+                    // CMYK as ink over paper.
+                    let k = u32::from(p[3]);
+                    rgb.extend((0..3).map(|i| 255 - (u32::from(p[i]) + k).min(255) as u8));
+                }
+            }
+            image::RgbImage::from_raw(width, height, rgb).map(image::DynamicImage::ImageRgb8)
+        }
+        _ => None,
+    }
+}
+
 fn jpeg(doc: &Document, stream: &Stream, max_pixels: u64) -> Option<Gray> {
     let data = before_last_filter(doc, stream)?;
     let reader =
@@ -484,6 +540,27 @@ mod tests {
         );
         assert_eq!((got.width, got.height), (8, 3));
         assert!(got.pixels.iter().all(|&p| p == 255));
+    }
+
+    #[test]
+    fn a_one_bit_figure_is_gray_and_an_rgb_one_is_left_to_the_plain_path() {
+        let one_bit = Stream::new(
+            dictionary! { "Width" => 2, "Height" => 1, "BitsPerComponent" => 1, "ColorSpace" => "DeviceGray" },
+            vec![0b1000_0000],
+        );
+        let got = figure_pixels(&Document::new(), &one_bit, u64::MAX).expect("a figure");
+        assert_eq!(got.into_luma8().into_raw(), [255, 0]);
+        let indexed: Vec<Object> = vec![
+            "Indexed".into(),
+            "DeviceRGB".into(),
+            0.into(),
+            Object::string_literal(vec![1u8, 2, 3]),
+        ];
+        let colour = Stream::new(
+            dictionary! { "Width" => 1, "Height" => 1, "BitsPerComponent" => 8, "ColorSpace" => indexed },
+            vec![0],
+        );
+        assert!(figure_pixels(&Document::new(), &colour, u64::MAX).is_none());
     }
 
     #[test]

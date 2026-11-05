@@ -62,7 +62,7 @@ if [ "$(printf '%s\n' "$V" 0.2.0 | sort -V | head -1)" = 0.2.0 ]; then
     (cd "$D" && grep ' paginaverto-aarch64-apple-darwin.tar.gz$' SHA256SUMS.txt | shasum -a 256 -c - >/dev/null 2>&1) \
       && ok "an archive matches its checksum" || bad "an archive does not match its checksum"
     L=$(tar tzf "$D/paginaverto-aarch64-apple-darwin.tar.gz")
-    for F in paginaverto LICENSE LICENSE-COMMERCIAL.md LICENSING.md README.md; do
+    for F in paginaverto LICENSE LICENSE-COMMERCIAL.md LICENSING.md THIRD-PARTY-NOTICES.md README.md; do
       grep -qxF "paginaverto-aarch64-apple-darwin/$F" <<< "$L" && ok "archive holds $F" || bad "archive lacks $F"
     done
     tar xzf "$D/paginaverto-aarch64-apple-darwin.tar.gz" -C "$D"
@@ -84,6 +84,10 @@ REG=no; [ "$(printf '%s\n' "$V" 0.1.2 | sort -V | head -1)" = 0.1.2 ] && REG=yes
     for f in LICENSE LICENSE-COMMERCIAL.md README.md; do
       grep -qx "$c-$V/$f" <<< "$L" && ok "$c crate has $f" || bad "$c crate lacks $f"
     done
+    if [ "$c" = paginaverto-ocr ]; then
+      grep -qx "$c-$V/THIRD-PARTY-NOTICES.md" <<< "$L" && ok "$c crate has THIRD-PARTY-NOTICES.md" \
+        || bad "$c crate lacks THIRD-PARTY-NOTICES.md"
+    fi
     LEAK=$(grep -E "/CLAUDE\.md$|/scripts/" <<< "$L" || true)
     [ -z "$LEAK" ] && ok "$c crate has no local-only file" || bad "$c crate ships: $LEAK"
   else

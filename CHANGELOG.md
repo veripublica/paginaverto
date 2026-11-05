@@ -11,6 +11,49 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Turkish scans read as Turkish.** OCR can now read lines with PaddlePaddle's
+  PP-OCRv5 Latin model (`LATIN_RECOGNITION`, 8 MB, Apache-2.0), whose alphabet
+  holds ç ğ ı İ ö ş ü â î û and the other Latin-script letters. ocrs still finds
+  the lines. On the public accuracy set, the character error rate fell from
+  13.04–17.26% to 0.19–0.67% in Turkish, and from 1.20–5.46% to 0.19–0.37% in
+  English. On one Turkish scan, checked against the publisher's EPUB, the share
+  of its words found rose from 55.70% to 94.30%. The set is small and synthetic,
+  and the scan is one book, so no language counts as supported yet. Only Turkish
+  and English are measured.
+- **Every image format a PDF scan uses:** JBIG2, JPEG 2000 and CCITT fax, and
+  raw images at 1, 2 or 4 bits, CMYK, indexed colour and image masks. All pure
+  Rust. A scan stored this way used to be refused; the one measured now reads.
+  In a PDF with a text layer, such images now become figures (PNG) instead of
+  being skipped, unless they are smaller than 4,096 pixels: marks, not
+  pictures. On the 18 PDFs measured, two books gained figures, 23 to 170 and 9
+  to 37, and their text is unchanged. Indexed-colour and CMYK raw images are
+  still skipped.
+- **Page images as input:** a PNG, JPEG or TIFF file (every page of a
+  multi-page TIFF), or a folder of them, read in natural name order.
+  `read` and `paginaverto -i` take them as they take a PDF; the format is found
+  from the bytes. Each image is one page, sized from its resolution or taken at
+  300 dpi.
+- **Offline OCR, step by step,** in `AGENTS.md`: which two files to download
+  once, their checksums, and how to use them on a machine with no network. The
+  command-line tool's help and its error for a missing model point there.
+
+### Changed
+
+- **The command-line tool prefers the Latin model** when `--ocr-models` holds
+  it. With only ocrs's own recognition model, which reads ASCII, the text is the
+  same as in 0.2.0.
+- **A text-layer page holding only an image** that decodes is reported as
+  `image_not_read`, not `undecodable_images`: 29 pages in 5 of the 18 PDFs
+  measured. Their text is unchanged.
+- **OCR takes longer with the Latin model:** 261 s for a 292-page scan, where
+  ocrs's model took 139 s.
+- **`Error::UndecodableImages`** now means the images failed to decode, not
+  that their format is unknown to paginaverto.
+- The web binding's `.wasm` grows with the image decoders, from 3.6 to 4.7 MB
+  before optimisation.
+
 ## [0.2.0] - 2026-11-05
 
 ### Added

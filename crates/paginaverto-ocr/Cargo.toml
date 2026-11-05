@@ -13,7 +13,12 @@ homepage.workspace = true
 # On crates.io (Baris, 2026-10-31). The licence files are copies of the
 # repository's (a package holds only its own directory); preflight.sh checks
 # they still match.
-include = ["/src", "/LICENSE", "/LICENSE-COMMERCIAL.md"]
+include = [
+    "/src",
+    "/LICENSE",
+    "/LICENSE-COMMERCIAL.md",
+    "/THIRD-PARTY-NOTICES.md",
+]
 
 [dependencies]
 ocrs.workspace = true
