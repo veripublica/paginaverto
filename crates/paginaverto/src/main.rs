@@ -50,8 +50,9 @@ USAGE:
     paginaverto -i <PATH> [OPTIONS]
 
 OPTIONS:
-    -i, --input <PATH>      The input. The only input form; positional paths are
-                            not accepted.
+    -i, --input <PATH>      The input: a PDF, a PNG, JPEG or TIFF page image, or
+                            a folder of page images. The only input form;
+                            positional paths are not accepted.
     -o, --output <PATH>     Where to write the output. Default: the input's name
                             with .zip, beside it.
     -f, --force             Permit replacing existing output files. Never lifts
@@ -59,9 +60,13 @@ OPTIONS:
         --language <TAG>    The language of the content (BCP-47, such as tr),
                             recorded as the document's language. Required for a
                             scan. Without it, the PDF's own /Lang is recorded.
-        --ocr-models <DIR>  The folder holding the OCR model files; the tool
-                            never downloads them, and checks them against their
-                            published SHA-256. Without it, a scan is refused.
+        --ocr-models <DIR>  The folder holding the OCR model files:
+                            text-detection.onnx and
+                            latin_PP-OCRv5_mobile_rec.onnx. The tool never
+                            downloads them, and checks their SHA-256. Without
+                            it, a scan or page image is refused. How to get
+                            them: https://github.com/veripublica/paginaverto/
+                            blob/main/AGENTS.md#ocr-reading-scans-and-page-images
         --threads <N>       How many threads do the work, 1 or more. The output
                             never depends on it. Default: every core but two, at
                             most four for OCR.

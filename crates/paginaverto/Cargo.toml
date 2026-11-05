@@ -34,6 +34,13 @@ required-features = ["cli"]
 lopdf.workspace = true
 image.workspace = true
 regex.workspace = true
+# Pure Rust. Always here, not behind `ocr`: what a PDF's image is, and whether it
+# can be read, must not depend on how paginaverto was built.
+# Page images as input: multi-page TIFF, which `image` reads one page of.
+tiff = { version = "=0.11.3", default-features = false, features = ["deflate", "jpeg", "lzw", "fax"] }
+hayro-ccitt = { version = "=0.5.0", default-features = false }
+hayro-jbig2 = { version = "=0.4.0", default-features = false, features = ["std", "simd"] }
+hayro-jpeg2000 = { version = "=0.5.0", default-features = false, features = ["std", "simd"] }
 paginaverto-ocr = { workspace = true, optional = true }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.145", optional = true }

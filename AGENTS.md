@@ -198,24 +198,77 @@ shows a kind it does not know as a paragraph, from its `runs`.
 }
 ```
 
-### OCR
+### OCR: reading scans and page images
 
-Build with the `ocr` feature, then pass the two ocrs models and the content
-language:
+paginaverto never downloads anything. To read scans, you download two model
+files once, put them in one folder, and from then on everything works offline.
+
+**1. Download the two files** into one folder, say `models/`:
+
+| Save it as | Size | Download from | SHA-256 |
+| --- | ---: | --- | --- |
+| `text-detection.onnx` | 2.5 MB | <https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx> | `a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe` |
+| `latin_PP-OCRv5_mobile_rec.onnx` | 8.0 MB | <https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.onnx> | `7888113072263cb471b93f66dd5e2ad70548dc526fa1ace760d0d973dd121498` |
+
+The second file is called `inference.onnx` where it is published. Save it under
+the name in the first column.
+
+```sh
+mkdir models
+curl -L -o models/text-detection.onnx \
+  https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx
+curl -L -o models/latin_PP-OCRv5_mobile_rec.onnx \
+  https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.onnx
+```
+
+**2. Check them,** if you like: `shasum -a 256 models/*` on macOS or Linux,
+`certutil -hashfile <file> SHA256` on Windows. The command-line tool checks them
+itself and refuses a file whose SHA-256 differs.
+
+**3. Use them.** Copy the folder to any machine you want, with or without a
+network:
+
+```sh
+paginaverto -i scan.pdf --language tr --ocr-models models/
+paginaverto -i page.png --language tr --ocr-models models/
+paginaverto -i pages/ --language tr --ocr-models models/      # a folder of images
+```
+
+**What they read:** text in the Latin alphabet, which includes Turkish, English,
+Spanish, French, German and most European languages. Only Turkish and English
+are measured so far (see [Measurements](#measurements)). Other alphabets
+(Cyrillic, Arabic, Greek, Chinese, …) need other models, which paginaverto does
+not take yet.
+
+**Licences:** the detection model is CC BY-SA 4.0 (from ocrs), the recognition
+model Apache-2.0 (from PaddlePaddle). If you pass them on, keep their licences
+with them.
+
+**Older model files** still work. ocrs's own `text-recognition.onnx` (or
+`.rten`) reads ASCII only and gives the same text as paginaverto 0.2. If a folder
+holds both, the Latin model is used.
+
+**Input:** a PDF, or page images: PNG, JPEG or TIFF (every page of a
+multi-page TIFF), or a folder of them, read in natural name order (`page2`
+before `page10`). The format is found from the file's bytes. Each image is one
+page, sized from its resolution, or taken at 300 dpi if it states none.
+
+**From the library,** with the `ocr` feature:
 
 ```rust
 let mut opts = paginaverto::Options::default();
-opts.language = Some("en".into());
+opts.language = Some("tr".into());
 opts.ocr = paginaverto::Ocr::Models {
-    detection: std::fs::read("text-detection.onnx")?,
-    recognition: std::fs::read("text-recognition.onnx")?,
+    detection: std::fs::read("models/text-detection.onnx")?,
+    recognition: std::fs::read("models/latin_PP-OCRv5_mobile_rec.onnx")?,
 };
+let doc = paginaverto::read(paginaverto::Input::Path("scan.pdf".as_ref()), &opts)?;
 ```
 
-`ONNX_MODELS` names the two files to fetch from `MODEL_BASE_URL` and gives their
-SHA-256; check it before loading. The older `.rten` files (`MODELS`) still load,
-but the ocrs bucket no longer serves them (403 since at least 2026-10-31). Both
-forms carry the same models and gave byte-identical text on every scan measured.
+`ONNX_MODELS[0]` and `LATIN_RECOGNITION` give the names and SHA-256 above, and
+`MODEL_BASE_URL` and `LATIN_RECOGNITION_URL` where to fetch them; check the
+SHA-256 before loading. Which recognition model it is, is found from the model
+itself.
 
 `inspect(input, &opts)` returns an `Inspection`: whether `read` would treat the
 document as a scan, each page's size and text source, and the fonts in use that

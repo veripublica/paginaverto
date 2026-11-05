@@ -28,7 +28,9 @@ use std::path::Path;
 use lopdf::ObjectId;
 use parallel::Pool;
 
+mod decode;
 mod document;
+mod images;
 mod inspect;
 mod limits;
 mod outline;
@@ -46,7 +48,9 @@ pub use outline::OutlineEntry;
 pub use parallel::{Cancel, PageDone, Progress};
 
 #[cfg(feature = "ocr")]
-pub use paginaverto_ocr::{MODEL_BASE_URL, MODELS, ModelFile, ONNX_MODELS};
+pub use paginaverto_ocr::{
+    LATIN_RECOGNITION, LATIN_RECOGNITION_URL, MODEL_BASE_URL, MODELS, ModelFile, ONNX_MODELS,
+};
 
 /// Where the PDF comes from.
 #[derive(Debug, Clone, Copy)]
@@ -232,19 +236,23 @@ fn guarded<T>(run: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
 fn pipeline(input: Input<'_>, opts: &Options) -> Result<Document, Error> {
     let limits = &opts.limits;
     limits.check_file(input)?;
-    let doc = limits.load(input)?;
-    limits.check(&doc)?;
-
     let pool = Pool {
         threads: opts.threads,
         cancel: &opts.cancel,
     };
+    if let Some(images) = images::open(input, limits)? {
+        let pages = image_pages(&images, &pool, opts)?;
+        return finish(text::Kind::Scan, pages, Metadata::default(), opts);
+    }
+    let doc = limits.load(input)?;
+    limits.check(&doc)?;
+
     let page_list: Vec<_> = doc.get_pages().into_iter().collect();
     let kind = text::classify(&doc, &page_list, &pool)?;
     let pages: Vec<text::Page> = match kind {
         text::Kind::Scan => {
             // Before OCR's checks: nobody should fetch models for this.
-            if let Some(formats) = text::undecodable_scan(&doc) {
+            if let Some(formats) = text::undecodable_scan(&doc, limits.max_image_pixels) {
                 return Err(Error::UndecodableImages(formats));
             }
             scan_pages(&doc, &page_list, &pool, opts)?
@@ -252,12 +260,21 @@ fn pipeline(input: Input<'_>, opts: &Options) -> Result<Document, Error> {
         text::Kind::TextLayer => {
             let with_figures = text::is_born_digital(&doc);
             pool.map(&page_list, opts.progress.as_ref(), |num, id| {
-                text::page(&doc, id, num, with_figures)
+                text::page(&doc, id, num, with_figures, limits.max_image_pixels)
             })?
         }
     };
 
-    let metadata = document::metadata(&doc);
+    finish(kind, pages, document::metadata(&doc), opts)
+}
+
+/// The pages read, as a document, or the reason there is none.
+fn finish(
+    kind: text::Kind,
+    pages: Vec<text::Page>,
+    metadata: Metadata,
+    opts: &Options,
+) -> Result<Document, Error> {
     let marks = outline::chapter_marks(&metadata.outline);
     let built = structure::build(&pages, marks.as_deref());
     if !built.has_content {
@@ -318,15 +335,10 @@ fn with_causes(e: &dyn std::error::Error) -> String {
 #[cfg(feature = "ocr")]
 const OCR_THREADS: usize = 4;
 
-/// Recognise every page of a scan. Checks run in epublift's order: OCR
-/// available, then the language, then the models.
+/// The OCR engine, once the checks pass, in epublift's order: OCR available,
+/// then the language, then the models.
 #[cfg(feature = "ocr")]
-fn scan_pages(
-    doc: &lopdf::Document,
-    pages: &[(u32, ObjectId)],
-    pool: &Pool<'_>,
-    opts: &Options,
-) -> Result<Vec<text::Page>, Error> {
+fn engine(opts: &Options) -> Result<paginaverto_ocr::Engine, Error> {
     let Ocr::Models {
         detection,
         recognition,
@@ -334,31 +346,94 @@ fn scan_pages(
     else {
         return Err(Error::ScanNeedsOcr);
     };
-    // Required, though 0.1.0 does not use it yet.
+    // Required, though the recognition does not use it.
     if opts.language.as_deref().is_none_or(str::is_empty) {
         return Err(Error::LanguageRequired);
     }
-    let engine = paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
-        .map_err(|e| Error::Models(e.to_string()))?;
+    paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
+        .map_err(|e| Error::Models(e.to_string()))
+}
+
+/// Recognise every page of a scan.
+#[cfg(feature = "ocr")]
+fn scan_pages(
+    doc: &lopdf::Document,
+    pages: &[(u32, ObjectId)],
+    pool: &Pool<'_>,
+    opts: &Options,
+) -> Result<Vec<text::Page>, Error> {
+    let engine = engine(opts)?;
+    let max_pixels = opts.limits.max_image_pixels;
     let pool = pool.at_most(OCR_THREADS);
     pool.map(pages, opts.progress.as_ref(), |number, id| {
         let frame = text::Frame::of(doc, id);
-        let mut page = text::Page {
-            number,
-            size: frame.size(),
-            ..text::Page::default()
-        };
         // A page without an image has nothing to read. One whose image cannot
-        // be decoded, or fails recognition, is reported.
+        // be decoded is reported.
         let Some(image) = text::largest_image(doc, id) else {
-            return page;
+            return text::Page {
+                number,
+                size: frame.size(),
+                ..text::Page::default()
+            };
         };
-        let Some(figure) = text::scan_image(doc, image) else {
-            let format = text::undecodable_format(image);
-            page.problems.push(PageProblem::UndecodableImage(format));
-            return page;
-        };
-        let Ok(lines) = engine.recognise(&figure.data) else {
+        match decode::gray(doc, image, max_pixels) {
+            Some(gray) => recognised(&engine, number, frame, &gray),
+            None => text::Page {
+                number,
+                size: frame.size(),
+                problems: vec![PageProblem::UndecodableImage(text::format_name(image))],
+                ..text::Page::default()
+            },
+        }
+    })
+}
+
+/// Recognise every page image.
+#[cfg(feature = "ocr")]
+fn image_pages(
+    images: &images::Images,
+    pool: &Pool<'_>,
+    opts: &Options,
+) -> Result<Vec<text::Page>, Error> {
+    let engine = engine(opts)?;
+    let max_pixels = opts.limits.max_image_pixels;
+    let pool = pool.at_most(OCR_THREADS);
+    // The pool walks PDF pages; an image page's index stands in for the object.
+    let list: Vec<(u32, ObjectId)> = (0..images.pages.len())
+        .map(|i| (i as u32 + 1, (i as u32, 0)))
+        .collect();
+    pool.map(&list, opts.progress.as_ref(), |number, (i, _)| match images
+        .picture(i as usize, max_pixels)
+    {
+        Some(picture) => {
+            let (w, h) = picture.points();
+            recognised(&engine, number, text::Frame::sized(w, h), &picture.gray)
+        }
+        None => text::Page {
+            number,
+            problems: vec![PageProblem::UndecodableImage(
+                images.kind(i as usize).map(images::Kind::name),
+            )],
+            ..text::Page::default()
+        },
+    })
+}
+
+/// One page image through OCR. A failure is reported on the page.
+#[cfg(feature = "ocr")]
+fn recognised(
+    engine: &paginaverto_ocr::Engine,
+    number: u32,
+    frame: text::Frame,
+    gray: &decode::Gray,
+) -> text::Page {
+    let mut page = text::Page {
+        number,
+        size: frame.size(),
+        ..text::Page::default()
+    };
+    {
+        let Ok(lines) = engine.recognise_gray(gray.width, gray.height, &gray.pixels) else {
             page.problems.push(PageProblem::OcrFailed);
             return page;
         };
@@ -370,12 +445,17 @@ fn scan_pages(
                 (!clean.is_empty()).then_some((clean, (r.x, r.y, r.width, r.height)))
             })
             .collect();
-        page.blocks = text::blocks_from_ocr(&boxed, number, &frame, text::pixels(image));
+        page.blocks = text::blocks_from_ocr(
+            &boxed,
+            number,
+            &frame,
+            (i64::from(gray.width), i64::from(gray.height)),
+        );
         if !page.blocks.is_empty() {
             page.source = TextSource::Ocr;
         }
-        page
-    })
+    }
+    page
 }
 
 /// Built without OCR: a scan is refused.
@@ -383,6 +463,16 @@ fn scan_pages(
 fn scan_pages(
     _doc: &lopdf::Document,
     _pages: &[(u32, ObjectId)],
+    _pool: &Pool<'_>,
+    _opts: &Options,
+) -> Result<Vec<text::Page>, Error> {
+    Err(Error::ScanNeedsOcr)
+}
+
+/// Built without OCR: page images are refused, as a scan is.
+#[cfg(not(feature = "ocr"))]
+fn image_pages(
+    _images: &images::Images,
     _pool: &Pool<'_>,
     _opts: &Options,
 ) -> Result<Vec<text::Page>, Error> {

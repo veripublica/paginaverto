@@ -3,11 +3,12 @@
 //! This crate is the OCR side of paginaverto's seam. The PDF side and the
 //! structure step only ever see [`Line`]s, whichever produced them.
 //!
-//! 0.1.0 wraps ocrs 0.13.1 on rten 0.26, unchanged from epublift cli-v4.5.1:
-//! the same illumination correction, the same models, the same text. The
-//! models are not part of this crate; the caller supplies their bytes, in
-//! ONNX form ([`ONNX_MODELS`], the files ocrs serves today) or in the older
-//! RTen form ([`MODELS`]). Both carry the same weights and give the same text.
+//! Lines are found by ocrs 0.13.1 on rten 0.26. They are read by PaddlePaddle's
+//! PP-OCRv5 Latin model ([`LATIN_RECOGNITION`]), whose alphabet holds Turkish
+//! and the other Latin-script languages, or by ocrs's own model, which knows
+//! ASCII only and gives the same text as paginaverto 0.2. The models are not
+//! part of this crate; the caller supplies their bytes, and which recognition
+//! model it is is detected from the model itself.
 
 #![warn(missing_docs)]
 
@@ -15,6 +16,8 @@ use std::fmt;
 
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
 use rten::Model;
+use rten_imageproc::{BoundingRect, RotatedRect};
+use rten_tensor::{AsView, Layout};
 
 /// Where the ocrs project publishes its models.
 ///
@@ -32,8 +35,9 @@ pub struct ModelFile {
     pub sha256: &'static str,
 }
 
-/// The detection model, then the recognition model, in ONNX form: the files
-/// ocrs serves. CC BY-SA 4.0 (trained on HierText); whoever redistributes them
+/// The detection model, then ocrs's own recognition model, in ONNX form: the
+/// files ocrs serves. Its recognition model reads ASCII only; prefer
+/// [`LATIN_RECOGNITION`]. CC BY-SA 4.0 (trained on HierText); whoever redistributes them
 /// gives the attribution their license asks for.
 ///
 /// On 2026-10-31 they gave byte-identical text to [`MODELS`] on every scan
@@ -48,6 +52,22 @@ pub const ONNX_MODELS: [ModelFile; 2] = [
         sha256: "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5",
     },
 ];
+
+/// The recognition model to use: PaddlePaddle's PP-OCRv5 Latin model, in ONNX
+/// form. Apache-2.0. Its 836 characters cover Turkish (ç ğ ı İ ö ş ü â î û) and
+/// the other Latin-script languages, with digits and punctuation. Pass it as the
+/// recognition model with [`ONNX_MODELS`]'s detection model.
+///
+/// Fetch it from [`LATIN_RECOGNITION_URL`] and save it under this name.
+pub const LATIN_RECOGNITION: ModelFile = ModelFile {
+    name: "latin_PP-OCRv5_mobile_rec.onnx",
+    sha256: "7888113072263cb471b93f66dd5e2ad70548dc526fa1ace760d0d973dd121498",
+};
+
+/// Where [`LATIN_RECOGNITION`] is published, pinned to the upstream commit
+/// whose file has that SHA-256 (PaddlePaddle on Hugging Face, as
+/// `inference.onnx`).
+pub const LATIN_RECOGNITION_URL: &str = "https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.onnx";
 
 /// The same two models in the RTen form epublift downloaded until 2026-10
 /// (copies of 2026-10-26). No longer served (403); kept so that an existing
@@ -67,7 +87,7 @@ pub const MODELS: [ModelFile; 2] = [
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Line {
-    /// The line's text, as ocrs gives it.
+    /// The line's text, as the recognition model gives it.
     pub text: String,
     /// Where the line sits on the page image, in pixels: the box around its
     /// characters. `None` for a line without characters.
@@ -112,7 +132,133 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// A loaded recogniser. Build it once and use it for every page.
-pub struct Engine(OcrEngine);
+pub struct Engine {
+    detector: OcrEngine,
+    /// A PP-OCR recognition model, which ocrs cannot run itself.
+    paddle: Option<Paddle>,
+}
+
+/// The characters of the PP-OCRv5 Latin model, in the order of its output.
+const LATIN_DICT: &str = include_str!("latin_dict.txt");
+
+struct Paddle {
+    model: Model,
+    /// Output label to character: 0 is CTC's blank, the last is a space.
+    labels: Vec<String>,
+}
+
+impl Paddle {
+    /// Is this a PP-OCR recognition model? Its input is `[n, 3, 48, width]`;
+    /// ocrs's has one channel.
+    fn accepts(model: &Model) -> bool {
+        let Some(id) = model.input_ids().first() else {
+            return false;
+        };
+        let Some(shape) = model.node_info(*id).and_then(|n| n.shape()) else {
+            return false;
+        };
+        shape.len() == 4
+            && matches!(shape[1], rten::Dimension::Fixed(3))
+            && matches!(shape[2], rten::Dimension::Fixed(48))
+    }
+
+    fn new(model: Model) -> Paddle {
+        let mut labels = vec![String::new()];
+        labels.extend(LATIN_DICT.lines().map(str::to_owned));
+        labels.push(" ".to_owned());
+        Paddle { model, labels }
+    }
+
+    /// One line's crop at the model's height, and its box. The crop is the box around the line's words,
+    /// with no margin and not turned to the line's slant: on the measured scan,
+    /// a margin of a quarter line took neighbouring lines in and cost 56 points
+    /// of words found, and following the slant cost 25.
+    fn crop(page: &image::RgbImage, words: &[RotatedRect]) -> Option<(image::RgbImage, Rect)> {
+        use image::imageops::{self, FilterType};
+        let r = words
+            .iter()
+            .map(|w| w.bounding_rect())
+            .reduce(|a, b| a.union(b))?;
+        let (pw, ph) = page.dimensions();
+        let x0 = r.left().max(0.0) as u32;
+        let y0 = r.top().max(0.0) as u32;
+        let x1 = (r.right().max(0.0) as u32).min(pw);
+        let y1 = (r.bottom().max(0.0) as u32).min(ph);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let (w, h) = (x1 - x0, y1 - y0);
+        let crop = imageops::crop_imm(page, x0, y0, w, h).to_image();
+        let width = ((HEIGHT as f32 * w as f32 / h as f32).ceil() as u32).clamp(16, 3200);
+        let line = imageops::resize(&crop, width, HEIGHT, FilterType::Triangle);
+        let rect = Rect {
+            x: x0 as f32,
+            y: y0 as f32,
+            width: w as f32,
+            height: h as f32,
+        };
+        Some((line, rect))
+    }
+
+    /// One line's text.
+    fn read_line(&self, line: &image::RgbImage) -> Result<String, Error> {
+        let (width, height) = (line.width() as usize, HEIGHT as usize);
+        // PP-OCR takes BGR in [-1, 1]; the page is gray, so the order does not matter.
+        let mut input = rten_tensor::NdTensor::<f32, 4>::zeros([1, 3, height, width]);
+        for (x, y, p) in line.enumerate_pixels() {
+            for c in 0..3 {
+                input[[0, c, y as usize, x as usize]] = (f32::from(p[2 - c]) / 255.0 - 0.5) / 0.5;
+            }
+        }
+        let output = self
+            .model
+            .run_one(input.view().into(), None)
+            .map_err(|e| Error::Recognise(e.to_string()))?;
+        let output: rten_tensor::NdTensor<f32, 3> = output
+            .try_into()
+            .map_err(|_| Error::Recognise("unexpected output".to_owned()))?;
+        let [_, steps, classes] = output.shape();
+        let mut text = String::new();
+        let mut last = 0;
+        for t in 0..steps {
+            let best = (0..classes)
+                .max_by(|&a, &b| output[[0, t, a]].total_cmp(&output[[0, t, b]]))
+                .unwrap_or(0);
+            // CTC: a repeat is one character, the blank separates real repeats.
+            if best != 0
+                && best != last
+                && let Some(c) = self.labels.get(best)
+            {
+                text.push_str(c);
+            }
+            last = best;
+        }
+        Ok(text)
+    }
+
+    /// Every line of a page, in ocrs's order, one run of the model each. Lines
+    /// padded into batches gave no speed and lost text: on the accuracy set CER
+    /// rose to 14–38% on some pages, the padding read as letters.
+    fn read(&self, page: &image::RgbImage, lines: &[Vec<RotatedRect>]) -> Result<Vec<Line>, Error> {
+        let crops: Vec<_> = lines.iter().filter_map(|l| Self::crop(page, l)).collect();
+        let texts = crops
+            .iter()
+            .map(|(line, _)| self.read_line(line))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(crops
+            .into_iter()
+            .zip(texts)
+            .filter(|(_, text)| !text.trim().is_empty())
+            .map(|((_, rect), text)| Line {
+                text,
+                bbox: Some(rect),
+            })
+            .collect())
+    }
+}
+
+/// The height PP-OCR's recognition model takes its lines at.
+const HEIGHT: u32 = 48;
 
 impl fmt::Debug for Engine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -128,13 +274,18 @@ impl Engine {
             Model::load(detection).map_err(|e| Error::Models(format!("detection: {e}")))?;
         let recognition =
             Model::load(recognition).map_err(|e| Error::Models(format!("recognition: {e}")))?;
-        OcrEngine::new(OcrEngineParams {
+        let (recognition, paddle) = if Paddle::accepts(&recognition) {
+            (None, Some(Paddle::new(recognition)))
+        } else {
+            (Some(recognition), None)
+        };
+        let detector = OcrEngine::new(OcrEngineParams {
             detection_model: Some(detection),
-            recognition_model: Some(recognition),
+            recognition_model: recognition,
             ..Default::default()
         })
-        .map(Engine)
-        .map_err(|e| Error::Models(format!("ocrs engine init failed: {e}")))
+        .map_err(|e| Error::Models(format!("ocrs engine init failed: {e}")))?;
+        Ok(Engine { detector, paddle })
     }
 
     /// Recognise one page image (any format the `image` crate decodes here:
@@ -142,22 +293,45 @@ impl Engine {
     pub fn recognise(&self, image_bytes: &[u8]) -> Result<Vec<Line>, Error> {
         let img = image::load_from_memory(image_bytes)
             .map_err(|e| Error::Image(e.to_string()))?
-            .into_rgb8();
-        let img = flatten_illumination(&img);
+            .into_luma8();
+        self.recognise_image(&img)
+    }
+
+    /// Recognise one page given as 8-bit gray pixels, row by row.
+    pub fn recognise_gray(
+        &self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> Result<Vec<Line>, Error> {
+        let needed = u64::from(width) * u64::from(height);
+        if (pixels.len() as u64) < needed {
+            return Err(Error::Image("fewer pixels than its size".to_owned()));
+        }
+        let img = image::GrayImage::from_raw(width, height, pixels[..needed as usize].to_vec())
+            .ok_or_else(|| Error::Image("no pixels".to_owned()))?;
+        self.recognise_image(&img)
+    }
+
+    fn recognise_image(&self, gray: &image::GrayImage) -> Result<Vec<Line>, Error> {
+        let img = flatten_illumination(gray);
         let (w, h) = img.dimensions();
         let source = ImageSource::from_bytes(img.as_raw(), (w, h))
             .map_err(|e| Error::Image(e.to_string()))?;
         let input = self
-            .0
+            .detector
             .prepare_input(source)
             .map_err(|e| Error::Recognise(format!("prepare input: {e}")))?;
         let words = self
-            .0
+            .detector
             .detect_words(&input)
             .map_err(|e| Error::Recognise(e.to_string()))?;
-        let lines = self.0.find_text_lines(&input, &words);
+        let lines = self.detector.find_text_lines(&input, &words);
+        if let Some(paddle) = &self.paddle {
+            return paddle.read(&img, &lines);
+        }
         let lines = self
-            .0
+            .detector
             .recognize_text(&input, &lines)
             .map_err(|e| Error::Recognise(e.to_string()))?;
         Ok(lines
@@ -183,16 +357,10 @@ impl Engine {
 /// gradients: estimate the lighting by downscaling 24× and back (a blurred
 /// background), then divide it out, so paper turns uniformly bright and ink
 /// stays dark. The result is gray, in RGB.
-fn flatten_illumination(img: &image::RgbImage) -> image::RgbImage {
+fn flatten_illumination(gray: &image::GrayImage) -> image::RgbImage {
     use image::imageops::{self, FilterType};
-    let gray = image::DynamicImage::ImageRgb8(img.clone()).into_luma8();
     let (w, h) = gray.dimensions();
-    let small = imageops::resize(
-        &gray,
-        (w / 24).max(1),
-        (h / 24).max(1),
-        FilterType::Gaussian,
-    );
+    let small = imageops::resize(gray, (w / 24).max(1), (h / 24).max(1), FilterType::Gaussian);
     let background = imageops::resize(&small, w, h, FilterType::Triangle);
 
     let mut out = image::RgbImage::new(w, h);
@@ -211,7 +379,7 @@ mod tests {
 
     #[test]
     fn flattening_whitens_an_even_page() {
-        let img = image::RgbImage::from_pixel(96, 96, image::Rgb([180, 180, 180]));
+        let img = image::GrayImage::from_pixel(96, 96, image::Luma([180]));
         let out = flatten_illumination(&img);
         assert!(
             out.pixels()
@@ -227,7 +395,11 @@ mod tests {
 
     #[test]
     fn model_hashes_are_sha256_hex() {
-        for m in MODELS.iter().chain(&ONNX_MODELS) {
+        for m in MODELS
+            .iter()
+            .chain(&ONNX_MODELS)
+            .chain([&LATIN_RECOGNITION])
+        {
             assert_eq!(m.sha256.len(), 64, "{}", m.name);
             assert!(
                 m.sha256

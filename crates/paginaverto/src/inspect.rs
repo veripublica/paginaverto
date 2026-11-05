@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Object, ObjectId};
 
+use crate::images;
 use crate::parallel::Pool;
 use crate::text::{self, Kind};
 use crate::{Error, Input, Options};
@@ -37,8 +38,8 @@ pub struct PageInfo {
     pub height: f32,
     /// Where text on this page would come from.
     pub source: PageSource,
-    /// On a [`PageSource::Scan`] page: the format of its image, if that is one
-    /// this build cannot decode.
+    /// On a [`PageSource::Scan`] page: the format of its image, if it fails to
+    /// decode.
     pub undecodable_image: Option<&'static str>,
 }
 
@@ -92,17 +93,20 @@ struct Seen<'a> {
 pub(crate) fn inspect(input: Input<'_>, opts: &Options) -> Result<Inspection, Error> {
     let limits = &opts.limits;
     limits.check_file(input)?;
-    let doc = limits.load(input)?;
-    limits.check(&doc)?;
-
     let pool = Pool {
         threads: opts.threads,
         cancel: &opts.cancel,
     };
+    if let Some(images) = images::open(input, limits)? {
+        return inspect_images(&images, &pool, opts);
+    }
+    let doc = limits.load(input)?;
+    limits.check(&doc)?;
+
     let page_list: Vec<_> = doc.get_pages().into_iter().collect();
     let reads_as_scan = text::classify(&doc, &page_list, &pool)? == Kind::Scan;
     let seen = pool.map(&page_list, opts.progress.as_ref(), |number, id| {
-        look_at_page(&doc, id, number)
+        look_at_page(&doc, id, number, limits.max_image_pixels)
     })?;
 
     let mut fonts: BTreeMap<(String, String), FontInfo> = BTreeMap::new();
@@ -133,7 +137,7 @@ pub(crate) fn inspect(input: Input<'_>, opts: &Options) -> Result<Inspection, Er
     })
 }
 
-fn look_at_page(doc: &Document, id: ObjectId, number: u32) -> Seen<'_> {
+fn look_at_page(doc: &Document, id: ObjectId, number: u32, max_image_pixels: u64) -> Seen<'_> {
     let content = Content::decode(&doc.get_page_content(id)).ok();
     let shown = text::shown_bytes(doc, id);
     let shows_text = shown > 0;
@@ -149,7 +153,10 @@ fn look_at_page(doc: &Document, id: ObjectId, number: u32) -> Seen<'_> {
     };
     let (width, height) = text::Frame::of(doc, id).size();
     let undecodable_image = (source == PageSource::Scan)
-        .then(|| text::largest_image(doc, id).and_then(text::undecodable_format))
+        .then(|| {
+            text::largest_image(doc, id)
+                .and_then(|i| text::undecodable_format(doc, i, max_image_pixels))
+        })
         .flatten();
 
     // Only fonts the content selects: a page's resources often list more.
@@ -183,6 +190,37 @@ fn look_at_page(doc: &Document, id: ObjectId, number: u32) -> Seen<'_> {
         },
         fonts,
     }
+}
+
+/// Page images: every page is a scan, and none has fonts. Each is decoded, so
+/// that one that cannot be is named.
+fn inspect_images(
+    images: &images::Images,
+    pool: &Pool<'_>,
+    opts: &Options,
+) -> Result<Inspection, Error> {
+    let list: Vec<(u32, ObjectId)> = (0..images.pages.len())
+        .map(|i| (i as u32 + 1, (i as u32, 0)))
+        .collect();
+    let pages = pool.map(&list, opts.progress.as_ref(), |number, (i, _)| {
+        let picture = images.picture(i as usize, opts.limits.max_image_pixels);
+        let (width, height) = picture.as_ref().map_or((0.0, 0.0), |p| p.points());
+        PageInfo {
+            number,
+            width,
+            height,
+            source: PageSource::Scan,
+            undecodable_image: picture
+                .is_none()
+                .then(|| images.kind(i as usize).map(images::Kind::name))
+                .flatten(),
+        }
+    })?;
+    Ok(Inspection {
+        reads_as_scan: true,
+        pages,
+        fonts: Vec::new(),
+    })
 }
 
 fn font_field(dict: &Dictionary, key: &[u8]) -> String {

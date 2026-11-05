@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use paginaverto::{
-    Block, BlockBox, BlockKind, Document, Error, Input, MODELS, ModelFile, ONNX_MODELS, Ocr,
-    Options, OutlineEntry, Page, PageDone, PageProblem, Progress, Run, SCHEMA_VERSION, TextSource,
+    Block, BlockBox, BlockKind, Document, Error, Input, LATIN_RECOGNITION, MODELS, ModelFile,
+    ONNX_MODELS, Ocr, Options, OutlineEntry, Page, PageDone, PageProblem, Progress, Run,
+    SCHEMA_VERSION, TextSource,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -153,16 +154,17 @@ fn check_output(input: &Path, output: &Path, force: bool) -> Result<(), String> 
 /// The folder's two model files, ONNX if it has them, else RTen, checked against
 /// their published SHA-256: a damaged model reads badly without saying so.
 fn load_models(dir: &Path) -> Result<Ocr, String> {
-    let read = |which: usize| {
-        let files = [ONNX_MODELS[which], MODELS[which]];
+    // The first file found is used: for recognition the Latin model, which reads
+    // Turkish, before ocrs's own, which gives 0.2's text.
+    let read = |files: &[ModelFile]| {
         let found = files
             .iter()
             .find_map(|file| Some((file, fs::read(dir.join(file.name)).ok()?)));
         let (file, bytes) = found.ok_or_else(|| {
+            let names: Vec<&str> = files.iter().map(|f| f.name).collect();
             format!(
-                "no {} or {} in {}",
-                files[0].name,
-                files[1].name,
+                "none of {} in {}; how to get them: {MODELS_GUIDE}",
+                names.join(", "),
                 dir.display()
             )
         })?;
@@ -172,10 +174,13 @@ fn load_models(dir: &Path) -> Result<Ocr, String> {
         Ok(bytes)
     };
     Ok(Ocr::Models {
-        detection: read(0)?,
-        recognition: read(1)?,
+        detection: read(&[ONNX_MODELS[0], MODELS[0]])?,
+        recognition: read(&[LATIN_RECOGNITION, ONNX_MODELS[1], MODELS[1]])?,
     })
 }
+
+/// Where the model files and their download are explained.
+const MODELS_GUIDE: &str = "https://github.com/veripublica/paginaverto/blob/main/AGENTS.md#ocr-reading-scans-and-page-images";
 
 fn not_the_model(file: &ModelFile, dir: &Path) -> String {
     format!(

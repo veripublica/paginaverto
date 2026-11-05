@@ -236,7 +236,51 @@ fn main() {
         let name = Path::new(font_path).file_stem().unwrap().to_string_lossy();
         for (lang, corpus) in [("en", EN), ("tr", TR)] {
             for quality in [Quality::Clean, Quality::Noisy] {
-                let pdf = scan_pdf(&render(corpus, &font, quality));
+                let pages = render(corpus, &font, quality);
+                let pdf = scan_pdf(&pages);
+                // The same pages as page images: a folder of PNGs and one
+                // multi-page TIFF must read as the PDF does.
+                let folder =
+                    std::env::temp_dir().join(format!("ocr-accuracy-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&folder);
+                std::fs::create_dir_all(&folder).expect("a temporary folder");
+                for (i, page) in pages.iter().enumerate() {
+                    page.save(folder.join(format!("page{}.png", i + 1)))
+                        .expect("writes a PNG");
+                }
+                let tiff = folder.join("all.tif");
+                {
+                    let mut out = std::fs::File::create(&tiff).expect("writes a TIFF");
+                    let mut encoder = tiff::encoder::TiffEncoder::new(&mut out).expect("a TIFF");
+                    for page in &pages {
+                        encoder
+                            .write_image::<tiff::encoder::colortype::Gray8>(
+                                page.width(),
+                                page.height(),
+                                page.as_raw(),
+                            )
+                            .expect("a TIFF page");
+                    }
+                }
+                let text_of = |doc: paginaverto::Document| {
+                    squash(
+                        &doc.blocks
+                            .iter()
+                            .map(|b| b.text())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    )
+                };
+                let tiff_text = read(Input::Path(&tiff), &opts).map(text_of);
+                std::fs::remove_file(&tiff).expect("removes the TIFF");
+                let png_text = read(Input::Path(&folder), &opts).map(text_of);
+                let _ = std::fs::remove_dir_all(&folder);
+                let pdf_text = read(Input::Bytes(&pdf), &opts).map(text_of);
+                let same = |r: &Result<String, paginaverto::Error>| match (r, &pdf_text) {
+                    (Ok(a), Ok(b)) if a == b => "same",
+                    _ => "DIFFERENT",
+                };
+                let images = format!("PNG folder {}, TIFF {}", same(&png_text), same(&tiff_text));
                 let (got, found) = match read(Input::Bytes(&pdf), &opts) {
                     Ok(doc) => {
                         let mut text = String::new();
@@ -255,10 +299,13 @@ fn main() {
                 };
                 let want = squash(corpus);
                 println!(
-                    "{lang} {name} {quality:?}: CER {:.2}%, folded {:.2}%, paragraphs {found} of {}",
+                    "{lang} {name} {quality:?}: CER {:.2}%, folded {:.2}%, paragraphs {found} of {}; {images}",
                     cer(&got, &want),
                     cer(&fold_turkish(&got), &fold_turkish(&want)),
-                    corpus.split("\n\n").filter(|p| !p.trim().is_empty()).count(),
+                    corpus
+                        .split("\n\n")
+                        .filter(|p| !p.trim().is_empty())
+                        .count(),
                 );
             }
         }

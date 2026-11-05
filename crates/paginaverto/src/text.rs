@@ -255,7 +255,13 @@ impl Default for Page {
 
 /// Read one text-layer page. `with_figures` is decided once per document
 /// (see [`is_born_digital`]).
-pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figures: bool) -> Page {
+pub(crate) fn page(
+    doc: &Document,
+    page_id: ObjectId,
+    page_num: u32,
+    with_figures: bool,
+    max_image_pixels: u64,
+) -> Page {
     let born_digital = !has_full_page_image(doc, page_id);
     let frame = Frame::of(doc, page_id);
     let mut big_font = Vec::new();
@@ -303,7 +309,8 @@ pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figure
     } else if born_digital {
         (TextSource::None, Vec::new())
     } else {
-        let format = largest_image(doc, page_id).and_then(undecodable_format);
+        let format =
+            largest_image(doc, page_id).and_then(|i| undecodable_format(doc, i, max_image_pixels));
         let problem = match format {
             Some(_) => PageProblem::UndecodableImage(format),
             None => PageProblem::ImageNotRead,
@@ -355,6 +362,15 @@ impl Frame {
                 .and_then(|o| o.as_i64().ok())
                 .unwrap_or(0)
                 .rem_euclid(360),
+        }
+    }
+
+    /// A page of this width and height in points, unturned: a page image's.
+    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    pub fn sized(width: f32, height: f32) -> Frame {
+        Frame {
+            edges: Some([0.0, 0.0, width, height]),
+            turn: 0,
         }
     }
 
@@ -1492,26 +1508,6 @@ fn figures(doc: &Document, page_id: ObjectId) -> Vec<Figure> {
         .unwrap_or_default()
 }
 
-/// An image as bytes OCR can decode.
-#[cfg_attr(not(feature = "ocr"), allow(dead_code))]
-pub(crate) fn scan_image(doc: &Document, image: &Stream) -> Option<Figure> {
-    figure(doc, image)
-}
-
-/// An image's width and height in pixels.
-#[cfg_attr(not(feature = "ocr"), allow(dead_code))]
-pub(crate) fn pixels(image: &Stream) -> (i64, i64) {
-    let dim = |k: &[u8]| {
-        image
-            .dict
-            .get(k)
-            .ok()
-            .and_then(|o| o.as_i64().ok())
-            .unwrap_or(0)
-    };
-    (dim(b"Width"), dim(b"Height"))
-}
-
 /// The page's largest image; the first of equal largest wins.
 pub(crate) fn largest_image(doc: &Document, page_id: ObjectId) -> Option<&Stream> {
     let res = resources(doc, page_id)?;
@@ -1525,16 +1521,16 @@ pub(crate) fn largest_image(doc: &Document, page_id: ObjectId) -> Option<&Stream
     Some(best?.0)
 }
 
-/// The formats of a scan's page images, if every one of them is in a format
-/// this build cannot decode; otherwise none. A page without an image does not
-/// count either way.
-pub(crate) fn undecodable_scan(doc: &Document) -> Option<Vec<String>> {
+/// The formats of a scan's page images, if every one of them fails to decode;
+/// otherwise none, at the first page that decodes. A page without an image does
+/// not count either way.
+pub(crate) fn undecodable_scan(doc: &Document, max_image_pixels: u64) -> Option<Vec<String>> {
     let mut formats: Vec<String> = Vec::new();
     for id in doc.get_pages().into_values() {
         let Some(image) = largest_image(doc, id) else {
             continue;
         };
-        let name = undecodable_format(image)?;
+        let name = undecodable_format(doc, image, max_image_pixels)?;
         if !formats.iter().any(|f| f == name) {
             formats.push(name.to_string());
         }
@@ -1542,8 +1538,17 @@ pub(crate) fn undecodable_scan(doc: &Document) -> Option<Vec<String>> {
     (!formats.is_empty()).then_some(formats)
 }
 
-/// The image's format, if it is one this build cannot decode.
-pub(crate) fn undecodable_format(image: &Stream) -> Option<&'static str> {
+/// The image's format, if it is a coded one and does not decode.
+pub(crate) fn undecodable_format(
+    doc: &Document,
+    image: &Stream,
+    max_image_pixels: u64,
+) -> Option<&'static str> {
+    format_name(image).filter(|_| crate::decode::gray(doc, image, max_image_pixels).is_none())
+}
+
+/// The name of a coded image's format, to report.
+pub(crate) fn format_name(image: &Stream) -> Option<&'static str> {
     match last_filter(image) {
         Some(b"JBIG2Decode") => Some("JBIG2"),
         Some(b"JPXDecode") => Some("JPEG 2000"),
@@ -1553,7 +1558,7 @@ pub(crate) fn undecodable_format(image: &Stream) -> Option<&'static str> {
 }
 
 /// With a filter chain, the last filter names the format.
-fn last_filter(stream: &Stream) -> Option<&[u8]> {
+pub(crate) fn last_filter(stream: &Stream) -> Option<&[u8]> {
     stream.dict.get(b"Filter").ok().and_then(|o| match o {
         Object::Name(n) => Some(n.as_slice()),
         Object::Array(a) => a.iter().filter_map(|x| x.as_name().ok()).next_back(),
