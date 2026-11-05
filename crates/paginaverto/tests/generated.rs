@@ -785,3 +785,208 @@ fn outline_titles_do_not_hide_a_pdf_with_no_text() {
     doc.save_to(&mut out).unwrap();
     assert!(read(Input::Bytes(&out), &Options::default()).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Image codecs, against fixtures made by tests/fixtures/make.py from a fixed
+// pattern rebuilt here.
+
+const PATTERN: (u32, u32) = (80, 64);
+
+/// The C library's rand(), as make.py draws it.
+fn pattern(n: usize) -> Vec<u32> {
+    let mut x: u64 = 1;
+    (0..n)
+        .map(|_| {
+            x = (x * 1_103_515_245 + 12_345) % (1 << 31);
+            (x >> 16) as u32
+        })
+        .collect()
+}
+
+/// The one figure a text-layer page with this image gives, decoded.
+fn the_figure(dict: lopdf::Dictionary, stored: Vec<u8>) -> image::DynamicImage {
+    let text = "A sentence of ordinary words. ".repeat(4);
+    let bytes = pdf(
+        simple_font,
+        Some(Stream::new(dict, stored)),
+        &[vec![
+            op("BT", vec![]),
+            op("Tf", vec!["F1".into(), 12.into()]),
+            op("Td", vec![72.into(), 700.into()]),
+            op("Tj", vec![Object::string_literal(text)]),
+            op("ET", vec![]),
+        ]],
+    );
+    let doc = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+    let figures: Vec<_> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match &b.kind {
+            BlockKind::Figure(f) => Some(f.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(figures.len(), 1);
+    assert_eq!(figures[0].media_type, "image/png");
+    image::load_from_memory(&figures[0].data).unwrap()
+}
+
+fn image_dict(filter: &str, colour: &str, bits: i64) -> lopdf::Dictionary {
+    dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Image",
+        "Width" => i64::from(PATTERN.0),
+        "Height" => i64::from(PATTERN.1),
+        "ColorSpace" => colour,
+        "BitsPerComponent" => bits,
+        "Filter" => filter,
+    }
+}
+
+#[test]
+fn a_group4_fax_figure_decodes_to_its_exact_pixels() {
+    let mut dict = image_dict("CCITTFaxDecode", "DeviceGray", 1);
+    dict.set(
+        "DecodeParms",
+        dictionary! {
+            "K" => -1,
+            "Columns" => i64::from(PATTERN.0),
+            "Rows" => i64::from(PATTERN.1),
+            "BlackIs1" => true,
+        },
+    );
+    let got = the_figure(dict, include_bytes!("fixtures/pattern.g4").to_vec()).into_luma8();
+    let want: Vec<u8> = pattern((PATTERN.0 * PATTERN.1) as usize)
+        .iter()
+        .map(|v| if v & 1 == 1 { 255 } else { 0 })
+        .collect();
+    assert_eq!(got.dimensions(), PATTERN);
+    assert_eq!(got.into_raw(), want);
+}
+
+#[test]
+fn a_lossless_jpeg_2000_figure_decodes_to_its_exact_pixels() {
+    let n = (PATTERN.0 * PATTERN.1) as usize;
+    let r = pattern(n * 3);
+    let gray = the_figure(
+        image_dict("JPXDecode", "DeviceGray", 8),
+        include_bytes!("fixtures/pattern.jp2").to_vec(),
+    );
+    let want: Vec<u8> = r[..n].iter().map(|v| (v & 255) as u8).collect();
+    assert_eq!(gray.into_luma8().into_raw(), want);
+
+    let rgb = the_figure(
+        image_dict("JPXDecode", "DeviceRGB", 8),
+        include_bytes!("fixtures/pattern-rgb.jp2").to_vec(),
+    );
+    let want: Vec<u8> = (0..n)
+        .flat_map(|i| [r[i], r[i + n], r[i + 2 * n]].map(|v| (v & 255) as u8))
+        .collect();
+    assert_eq!(rgb.into_rgb8().into_raw(), want);
+}
+
+#[test]
+fn a_damaged_jpeg_2000_figure_is_no_figure() {
+    let mut data = include_bytes!("fixtures/pattern.jp2").to_vec();
+    data.truncate(40);
+    let bytes = {
+        let text = "A sentence of ordinary words. ".repeat(4);
+        pdf(
+            simple_font,
+            Some(Stream::new(image_dict("JPXDecode", "DeviceGray", 8), data)),
+            &[vec![
+                op("BT", vec![]),
+                op("Tf", vec!["F1".into(), 12.into()]),
+                op("Td", vec![72.into(), 700.into()]),
+                op("Tj", vec![Object::string_literal(text)]),
+                op("ET", vec![]),
+            ]],
+        )
+    };
+    let doc = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+    assert!(
+        !doc.blocks
+            .iter()
+            .any(|b| matches!(b.kind, BlockKind::Figure(_)))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Page images as input.
+
+fn gray_png(w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::GrayImage::from_pixel(w, h, image::Luma([230]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+fn tiff_of(pages: &[(u32, u32)]) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut encoder = tiff::encoder::TiffEncoder::new(&mut out).unwrap();
+    for &(w, h) in pages {
+        let pixels = vec![230u8; (w * h) as usize];
+        encoder
+            .write_image::<tiff::encoder::colortype::Gray8>(w, h, &pixels)
+            .unwrap();
+    }
+    out.into_inner()
+}
+
+#[test]
+fn every_page_of_a_tiff_is_a_scan_page() {
+    let bytes = tiff_of(&[(300, 400), (600, 800), (300, 400)]);
+    let found = paginaverto::inspect(Input::Bytes(&bytes), &Options::default()).unwrap();
+    assert!(found.reads_as_scan);
+    assert_eq!(found.pages.len(), 3);
+    assert!(
+        found
+            .pages
+            .iter()
+            .all(|p| p.source == paginaverto::PageSource::Scan && p.undecodable_image.is_none())
+    );
+    // No resolution in the file: 300 dpi, so 600 pixels are 144 points.
+    assert!((found.pages[1].width - 144.0).abs() < 0.01);
+}
+
+#[test]
+fn a_folder_of_images_reads_in_natural_order() {
+    let dir = std::env::temp_dir().join(format!("pv-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Widths tell the pages apart: page 2 is 600 pixels, page 10 is 900.
+    for (name, w) in [("page10.png", 900), ("page2.png", 600), ("page1.png", 300)] {
+        std::fs::write(dir.join(name), gray_png(w, 100)).unwrap();
+    }
+    std::fs::write(dir.join("notes.txt"), "not a page").unwrap();
+    std::fs::write(dir.join(".hidden.png"), "not a page either").unwrap();
+    let found = paginaverto::inspect(Input::Path(&dir), &Options::default()).unwrap();
+    let widths: Vec<f32> = found.pages.iter().map(|p| p.width).collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(widths, [72.0, 144.0, 216.0]);
+}
+
+#[test]
+fn a_folder_with_no_images_is_an_open_error() {
+    let dir = std::env::temp_dir().join(format!("pv-no-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let err = read(Input::Path(&dir), &Options::default()).unwrap_err();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(matches!(err, Error::Open(_)), "{err:?}");
+}
+
+#[test]
+fn a_page_image_with_ocr_off_is_refused_as_a_scan_is() {
+    let err = read(Input::Bytes(&gray_png(200, 100)), &Options::default()).unwrap_err();
+    assert_eq!(err, Error::ScanNeedsOcr);
+}
+
+#[test]
+fn a_damaged_page_image_is_reported_by_inspect() {
+    let mut bytes = gray_png(200, 100);
+    bytes.truncate(60);
+    let found = paginaverto::inspect(Input::Bytes(&bytes), &Options::default()).unwrap();
+    assert_eq!(found.pages[0].undecodable_image, Some("PNG"));
+}

@@ -915,6 +915,30 @@ fn join_lines(
 /// An OCR line's text and its box in pixels: left, top, width, height.
 pub(crate) type OcrLine = (String, (f32, f32, f32, f32));
 
+/// OCR's lines, each run of lines that share a column put top to bottom. ocrs
+/// can give a line out of place, after the lines below it. A run is lines that
+/// follow one another in OCR's order and overlap across by half the narrower:
+/// the next column starts a new run, so columns keep OCR's order.
+fn in_column_order(lines: &[OcrLine]) -> Vec<OcrLine> {
+    let overlap = |a: &OcrLine, b: &OcrLine| {
+        let (ax, aw) = (a.1.0, a.1.2);
+        let (bx, bw) = (b.1.0, b.1.2);
+        let shared = (ax + aw).min(bx + bw) - ax.max(bx);
+        shared > 0.5 * aw.min(bw)
+    };
+    let mut out: Vec<OcrLine> = Vec::with_capacity(lines.len());
+    let mut start = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 && !overlap(&lines[i - 1], line) {
+            out[start..].sort_by(|a, b| a.1.1.total_cmp(&b.1.1));
+            start = out.len();
+        }
+        out.push(line.clone());
+    }
+    out[start..].sort_by(|a, b| a.1.1.total_cmp(&b.1.1));
+    out
+}
+
 /// OCR's lines as paragraph blocks. `lines` are in the order OCR gives them, each
 /// with its box in the page image's pixels: left, top, width, height. A box's
 /// height follows the letters a line happens to hold, so every line gets the
@@ -927,6 +951,8 @@ pub(crate) fn blocks_from_ocr(
     frame: &Frame,
     image: (i64, i64),
 ) -> Vec<TextBlock> {
+    let lines = in_column_order(lines);
+    let lines = lines.as_slice();
     let mut heights: Vec<f32> = lines.iter().map(|(_, b)| b.3).collect();
     heights.sort_by(f32::total_cmp);
     let font = heights
@@ -1797,12 +1823,25 @@ endcmap";
 
     #[test]
     fn ocr_lines_going_back_up_the_page_are_a_new_column() {
+        // Lines are 900 pixels wide: the next column starts at 1100.
         let got = ocr_paragraphs(&[
-            ("End of a column", 200.0, 800.0),
-            ("Top of the next", 200.0, 200.0),
-            ("and more", 200.0, 244.0),
+            ("End of a column", 100.0, 800.0),
+            ("Top of the next", 1100.0, 200.0),
+            ("and more", 1100.0, 244.0),
         ]);
         assert_eq!(got, ["End of a column", "Top of the next and more"]);
+    }
+
+    #[test]
+    fn an_ocr_line_given_out_of_place_goes_back_into_its_column() {
+        // ocrs gave the middle line last; it shares the column, so it goes
+        // back between the other two.
+        let got = ocr_paragraphs(&[
+            ("The first line", 262.0, 200.0),
+            ("and the last.", 200.0, 288.0),
+            ("the middle one", 200.0, 244.0),
+        ]);
+        assert_eq!(got, ["The first line the middle one and the last."]);
     }
 
     #[test]

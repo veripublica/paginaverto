@@ -211,11 +211,12 @@ fn cer(got: &str, want: &str) -> f64 {
     100.0 * distance(&g, &w) as f64 / w.len() as f64
 }
 
-fn model(dir: &Path, stem: &str) -> Vec<u8> {
-    ["onnx", "rten"]
+/// The first of these files that the folder holds.
+fn model(dir: &Path, names: &[&str]) -> Vec<u8> {
+    names
         .iter()
-        .find_map(|ext| std::fs::read(dir.join(format!("{stem}.{ext}"))).ok())
-        .unwrap_or_else(|| panic!("no {stem} model in {}", dir.display()))
+        .find_map(|name| std::fs::read(dir.join(name)).ok())
+        .unwrap_or_else(|| panic!("none of {names:?} in {}", dir.display()))
 }
 
 fn main() {
@@ -227,9 +228,23 @@ fn main() {
     let mut opts = Options::default();
     opts.language = Some("en".into());
     opts.ocr = Ocr::Models {
-        detection: model(models, "text-detection"),
-        recognition: model(models, "text-recognition"),
+        detection: model(models, &["text-detection.onnx", "text-detection.rten"]),
+        recognition: model(
+            models,
+            &[
+                "latin_PP-OCRv5_mobile_rec.onnx",
+                "text-recognition.onnx",
+                "text-recognition.rten",
+            ],
+        ),
     };
+    // With OCR_MAX_CER (a percentage), any page set above it, or page images
+    // reading other than the PDF, fails the run: what CI checks.
+    let max_cer: Option<f64> = std::env::var("OCR_MAX_CER").ok().map(|v| {
+        v.parse()
+            .unwrap_or_else(|_| panic!("OCR_MAX_CER is not a number: {v}"))
+    });
+    let mut failed = Vec::new();
     for font_path in fonts {
         let font = FontVec::try_from_vec(std::fs::read(font_path).expect("reads the font"))
             .expect("a font");
@@ -294,13 +309,18 @@ fn main() {
                     }
                     Err(e) => {
                         println!("{lang} {name} {quality:?}: refused: {e}");
+                        failed.push(format!("{lang} {name} {quality:?}"));
                         continue;
                     }
                 };
                 let want = squash(corpus);
+                let rate = cer(&got, &want);
+                if max_cer.is_some_and(|max| rate > max) || images.contains("DIFFERENT") {
+                    failed.push(format!("{lang} {name} {quality:?}"));
+                }
                 println!(
                     "{lang} {name} {quality:?}: CER {:.2}%, folded {:.2}%, paragraphs {found} of {}; {images}",
-                    cer(&got, &want),
+                    rate,
                     cer(&fold_turkish(&got), &fold_turkish(&want)),
                     corpus
                         .split("\n\n")
@@ -309,5 +329,9 @@ fn main() {
                 );
             }
         }
+    }
+    if !failed.is_empty() {
+        eprintln!("failed: {}", failed.join(", "));
+        std::process::exit(1);
     }
 }

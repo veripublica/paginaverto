@@ -57,6 +57,41 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked --features paginaverto/ocr
 
+  # OCR on the public accuracy set, with the models users download: a CER above
+  # the limit, or page images reading other than the same pages in a PDF, fails.
+  # The only job that needs the network beyond crates.io: about 10 MB, checked
+  # against the SHA-256 the library publishes.
+  ocr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fonts (Liberation, metric copies of Arial and Times)
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends fonts-liberation
+
+      - name: Download the OCR models
+        run: |
+          set -euo pipefail
+          mkdir -p models
+          curl -fsSL --retry 3 -o models/text-detection.onnx \
+            https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx
+          curl -fsSL --retry 3 -o models/latin_PP-OCRv5_mobile_rec.onnx \
+            https://huggingface.co/PaddlePaddle/latin_PP-OCRv5_mobile_rec_onnx/resolve/89d3a50e2c27e2e7cceeab0e944c25c807d5db4f/inference.onnx
+          sha256sum -c <<'SUMS'
+          a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe  models/text-detection.onnx
+          7888113072263cb471b93f66dd5e2ad70548dc526fa1ace760d0d973dd121498  models/latin_PP-OCRv5_mobile_rec.onnx
+          SUMS
+
+      - name: Accuracy set through OCR
+        env:
+          OCR_MAX_CER: "2.0"
+        run: |
+          set -euo pipefail
+          f=/usr/share/fonts/truetype/liberation
+          cargo run --release --locked --manifest-path tools/ocr-accuracy/Cargo.toml -- \
+            models "$f/LiberationSans-Regular.ttf" "$f/LiberationSerif-Regular.ttf"
+
   # The declared MSRV, actually compiled.
   msrv:
     runs-on: ubuntu-latest

@@ -17,9 +17,9 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   PP-OCRv5 Latin model (`LATIN_RECOGNITION`, 8 MB, Apache-2.0), whose alphabet
   holds ç ğ ı İ ö ş ü â î û and the other Latin-script letters. ocrs still finds
   the lines. On the public accuracy set, the character error rate fell from
-  13.04–17.26% to 0.19–0.67% in Turkish, and from 1.20–5.46% to 0.19–0.37% in
+  13.04–17.26% to 0.48–0.67% in Turkish, and from 1.20–5.46% to 0.19–0.37% in
   English. On one Turkish scan, checked against the publisher's EPUB, the share
-  of its words found rose from 55.70% to 94.30%. The set is small and synthetic,
+  of its words found rose from 55.70% to 94.18%. The set is small and synthetic,
   and the scan is one book, so no language counts as supported yet. Only Turkish
   and English are measured.
 - **Every image format a PDF scan uses:** JBIG2, JPEG 2000 and CCITT fax, and
@@ -47,12 +47,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 - **A text-layer page holding only an image** that decodes is reported as
   `image_not_read`, not `undecodable_images`: 29 pages in 5 of the 18 PDFs
   measured. Their text is unchanged.
+- **OCR lines out of place are put back.** ocrs can give a line after the
+  lines below it, which put it at the end of its page. Within each column, lines
+  now go top to bottom.
+- **CI runs OCR** on the public accuracy set with the published models, and fails
+  above a character error rate of 2%.
 - **OCR takes longer with the Latin model:** 261 s for a 292-page scan, where
   ocrs's model took 139 s.
 - **`Error::UndecodableImages`** now means the images failed to decode, not
   that their format is unknown to paginaverto.
-- The web binding's `.wasm` grows with the image decoders, from 3.6 to 4.7 MB
-  before optimisation.
+- The web binding's `.wasm` grows with the image decoders, from 2.70 to 3.59 MB
+  (1.08 to 1.34 MB gzipped).
 
 ## [0.2.0] - 2026-11-05
 

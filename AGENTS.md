@@ -421,12 +421,18 @@ plain `cargo update`.
   | | Arial clean | Arial noisy | Times clean | Times noisy |
   | --- | ---: | ---: | ---: | ---: |
   | English | 0.28% | 0.19% | 0.37% | 0.28% |
-  | Turkish | 0.48% | 0.58% | 0.67% | 0.48% |
-  | Turkish, letters folded to ASCII | 0.19% | 0.48% | 0.48% | 0.29% |
+  | Turkish | 0.48% | 0.58% | 0.67% | 0.58% |
+  | Turkish, letters folded to ASCII | 0.19% | 0.48% | 0.48% | 0.38% |
 
-  Paragraphs of 6: 6 on every clean page; 4, 6, 5 and 5 on the noisy ones. The
-  same pages as a folder of PNGs and as one multi-page TIFF give the same text as
-  the PDF.
+  Paragraphs of 6: 6 on every clean page; 4 to 5 on the noisy ones. The same
+  pages as a folder of PNGs and as one multi-page TIFF give the same text as the
+  PDF.
+
+  CI runs the same set on Linux with Liberation Sans and Serif, the fonts metric
+  copies of Arial and Times, and fails above 2.00%. On a Mac: 0.19% to 1.05%.
+  That run found ocrs giving one line after the lines below it, which put it at
+  the end of the page (11.60% on one page); each column's lines are now put top
+  to bottom, which made it 0.29%.
 - **One Turkish scan with OCR,** 2026-11-05, 292 pages of JBIG2 and JPEG 2000,
   against the publisher's EPUB of the book (65,127 words, perhaps another
   edition). Share of its words found, counted as a bag of words; in brackets,
@@ -436,12 +442,14 @@ plain `cargo update`.
   | --- | ---: | ---: |
   | ocrs's model | 55.70% | (48.60%) |
   | Latin model, crop with a margin of 0.1 line | 90.38% | (93.94%) |
-  | Latin model, no margin (as shipped) | 94.30% | (95.38%) |
+  | Latin model, no margin | 94.30% | (95.38%) |
+  | Latin model, no margin, each column top to bottom (as shipped) | 94.18% | (95.24%) |
   | Latin model, margin of 0.25 line | 38.07% | (66.01%) |
   | Latin model, crop turned to the line's slant | 69.02% | (91.61%) |
 
   The reference has 35,094 of ş ğ ı ç ö ü and 1,059 İ; ours 34,165 and 712.
-  Paragraphs 2,157, against the reference's 2,061. Without flattening the
+  Paragraphs 2,177, against the reference's 2,061; in order, 87.33% of the
+  reference's words line up with ours, 86.12% before the columns were sorted. Without flattening the
   lighting, 90.27% instead of 90.38%. 0.2.0 refused this scan.
 - **The 18 PDFs, 0.3 against 0.2.0,** 2026-11-05: 7 byte-identical. 5 with a
   text layer differ only in 29 page problems, now `image_not_read` instead of
