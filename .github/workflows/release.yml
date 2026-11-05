@@ -4,8 +4,12 @@ name: Release
 # version's CHANGELOG.md section, so release notes are never written by hand
 # and never forgotten (epubveri's v0.5.x shipped blank release pages while
 # their CHANGELOG entries existed). The family's release-binaries.yml does
-# the same; paginaverto has no binaries, so this is that workflow's notes step
-# alone. crates.io and npm are publish-crate.yml and publish-npm.yml.
+# the same; here it is that workflow's notes step alone. crates.io and npm are
+# publish-crate.yml and publish-npm.yml.
+#
+# From 0.2.0 a new page starts as a draft, and release-binaries.yml publishes it
+# once the archives are on it. `releases/latest/download/<asset>` is what plugins
+# fetch, so `latest` must never be a release without binaries.
 #
 # workflow_dispatch fills in or refreshes the release of an existing tag (the
 # notes come from main's CHANGELOG.md).
@@ -73,5 +77,10 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "$TAG" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file RELEASE_NOTES.md
+            ver="${TAG#v}"
+            draft=()
+            if [ "$(printf '%s\n' "$ver" 0.2.0 | sort -V | head -1)" = 0.2.0 ]; then
+              draft=(--draft)
+            fi
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file RELEASE_NOTES.md "${draft[@]}"
           fi

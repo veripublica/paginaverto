@@ -10,9 +10,9 @@ name: Release binaries
 # Pure Rust with no C dependencies, so every target builds on a runner of its
 # own architecture; ARM64 Windows is linked by MSVC from the x86_64 runner. The
 # tool sits behind the `cli` feature, since the library's default build must
-# never pull OCR. The release page and its notes are release.yml's; this only
-# attaches files to it. crates.io and npm are publish-crate.yml and
-# publish-npm.yml.
+# never pull OCR. The release page and its notes are release.yml's, as a draft;
+# this attaches the files and then publishes it. crates.io and npm are
+# publish-crate.yml and publish-npm.yml.
 # Triggered by a `v*` tag. `workflow_dispatch` re-runs it against an existing
 # tag, or, with `dry_run`, builds and checks every target without touching any
 # release (to try a change to this file before a tag needs it).
@@ -174,9 +174,25 @@ jobs:
             dist/paginaverto-*.tar.gz
             dist/paginaverto-*.zip
 
-      - name: Attach to release
+      # release.yml writes the page as a draft, in seconds; these builds take
+      # minutes, so the wait is only for an odd start. The page goes public only
+      # now, with every archive on it, so `latest` always has binaries. If a build
+      # failed, nothing here ran: the page stays a draft, and `latest` stays where
+      # it was. Re-running against a published tag replaces its files.
+      - name: Attach to the release and publish it
         if: ${{ !inputs.dry_run }}
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          files: dist/*
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            gh release view "$TAG" > /dev/null 2>&1 && break
+            sleep 10
+          done
+          gh release upload "$TAG" dist/* --clobber
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ]; then
+            gh release edit "$TAG" --draft=false --latest
+          fi

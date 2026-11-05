@@ -97,8 +97,10 @@ first release published entirely by the workflows. Check the crates.io link
 any time with `publish-crate.yml`'s `verify_only` (publishes nothing). Claude
 never enters a token; a registry login, if ever needed again, is Baris's.
 
-`release.yml` writes the release page from the tag's CHANGELOG section and
-fails if there is none. `workflow_dispatch` with a `tag` input creates or
+`release.yml` writes the release page from the tag's CHANGELOG section as a
+draft and fails if there is none; `release-binaries.yml` publishes it once the 8
+archives are on it, so `latest` always has binaries. Run that workflow's `dry_run`
+on the commit to be tagged. `workflow_dispatch` with a `tag` input creates or
 refreshes the page of an existing tag (notes from main's CHANGELOG).
 
 ## Data rules

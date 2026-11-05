@@ -39,7 +39,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   or a scan only OCR can read, and lists the fonts with no usable `/ToUnicode` map.
   It follows the family's CLI convention v0.7, with the shared JSON report under
   `--format json`. Binaries for Linux, macOS and Windows, on x86_64 and ARM64, are
-  on the release page. From crates.io:
+  on the release page. All eight were built by the release workflow, and six were
+  started there; the x86_64 macOS and ARM64 Windows ones were built but never
+  started. OCR has run only on an ARM64 Mac, because the models cannot be downloaded
+  for CI. From crates.io:
   `cargo install --locked paginaverto --features cli`. The library has the same
   report as `paginaverto::inspect`.
 - **Limits (`Options::limits`):** the file's size, the number of pages, what one
