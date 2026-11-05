@@ -44,7 +44,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   through a text mask), is put together first. On the 18 PDFs, 34 such pages,
   each looked at: 13 kept (covers, plates, end papers and a pale worksheet), 21
   blank or holding only a library stamp or a shelf mark. A page counts as blank
-  when less than 3% of it differs from its paper.
+  when less than 3% of it differs from its paper. A kept page's figure has the
+  page as its box, so a reader knows where it came from, and the page is no
+  longer reported as `image_not_read`.
+- **Newly decoded colour figures are JPEGs** at quality 90; gray ones stay
+  exact PNGs. On 9 put-together pages of a library scan, 53.1 MB as PNG became
+  18.4 MB, at a PSNR of 38.9 dB at worst.
 - **`paginaverto::recognises(language)`** says whether OCR with the Latin model
   can read a language: its BCP-47 tag is written in Latin letters and the model
   has every one of them. True for 51 languages and Serbian in Latin letters

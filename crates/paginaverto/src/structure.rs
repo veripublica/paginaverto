@@ -32,7 +32,7 @@ enum Item {
         page: u32,
     },
     Body(Marked, Vec<BlockBox>),
-    Figure(Figure),
+    Figure(Figure, Vec<BlockBox>),
 }
 
 /// What the pages came to.
@@ -137,7 +137,12 @@ pub(crate) fn build(pages: &[Page], marks: Option<&[Mark]>) -> Built {
                 items.push(Item::Body(clean, boxes));
             }
         }
-        items.extend(page.figures.iter().cloned().map(Item::Figure));
+        items.extend(
+            page.figures
+                .iter()
+                .cloned()
+                .map(|(figure, boxes)| Item::Figure(figure, boxes)),
+        );
     }
 
     let has_content = items.iter().any(|i| {
@@ -162,7 +167,7 @@ pub(crate) fn build(pages: &[Page], marks: Option<&[Mark]>) -> Built {
     for (i, item) in items.iter().enumerate() {
         let (kind, boxes) = match item {
             Item::Body(text, boxes) => (BlockKind::Paragraph { runs: text.runs() }, boxes.clone()),
-            Item::Figure(f) => (BlockKind::Figure(f.clone()), Vec::new()),
+            Item::Figure(f, boxes) => (BlockKind::Figure(f.clone()), boxes.clone()),
             Item::Heading {
                 text, boxes, given, ..
             } => {
@@ -410,7 +415,7 @@ fn continue_across_page(
     let last = items
         .iter_mut()
         .rev()
-        .find(|i| !matches!(i, Item::Figure(_)));
+        .find(|i| !matches!(i, Item::Figure(..)));
     let Some(Item::Body(body, boxes)) = last else {
         return false;
     };

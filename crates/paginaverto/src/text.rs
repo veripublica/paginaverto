@@ -228,8 +228,9 @@ pub(crate) struct Page {
     pub born_digital: bool,
     /// Letters-only texts shown in a notably large font (heading candidates).
     pub big_font: Vec<String>,
-    /// The page's figures, in document order.
-    pub figures: Vec<Figure>,
+    /// The page's figures, in document order, each with where it sits when
+    /// that is known: so far only for a page image kept whole.
+    pub figures: Vec<(Figure, Vec<BlockBox>)>,
     /// Its visible size in points.
     pub size: (f32, f32),
     /// Where its text came from.
@@ -294,8 +295,11 @@ pub(crate) fn page(
             theirs
         }
     };
-    let figures = if with_figures {
+    let figures: Vec<(Figure, Vec<BlockBox>)> = if with_figures {
         figures(doc, page_id, max_image_pixels)
+            .into_iter()
+            .map(|f| (f, Vec::new()))
+            .collect()
     } else if !born_digital && blocks.is_empty() {
         // A scan with a text layer: its page images are the pages, not figures.
         // One whose layer holds no text is a cover or a plate, and its image
@@ -306,11 +310,24 @@ pub(crate) fn page(
                     .filter(|image| is_whole_page_picture(doc, image, max_image_pixels))
                     .and_then(|image| figure(doc, image, max_image_pixels))
             })
+            .map(|f| {
+                let (width, height) = frame.size();
+                let whole = BlockBox {
+                    page: page_num,
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height,
+                };
+                (f, vec![whole])
+            })
             .into_iter()
             .collect()
     } else {
         Vec::new()
     };
+    // The image of a text-less page that is kept as a figure is not lost.
+    let image_kept = !born_digital && blocks.is_empty() && !figures.is_empty();
     let (source, problems) = if !blocks.is_empty() {
         let source = if born_digital {
             TextSource::TextLayer
@@ -318,7 +335,7 @@ pub(crate) fn page(
             TextSource::EmbeddedOcr
         };
         (source, Vec::new())
-    } else if born_digital {
+    } else if born_digital || image_kept {
         (TextSource::None, Vec::new())
     } else {
         let format =
@@ -1622,9 +1639,9 @@ fn figure(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figu
             ext: "jpg",
         }),
         Some(b"FlateDecode") | Some(b"LZWDecode") | None => {
-            raw_to_png(doc, stream).or_else(|| decoded_png(doc, stream, max_image_pixels))
+            raw_to_png(doc, stream).or_else(|| decoded_figure(doc, stream, max_image_pixels))
         }
-        _ => decoded_png(doc, stream, max_image_pixels),
+        _ => decoded_figure(doc, stream, max_image_pixels),
     }
 }
 
@@ -1697,15 +1714,7 @@ fn layered_figure(doc: &Document, page_id: ObjectId, max_image_pixels: u64) -> O
     if !has_content(luma.as_raw()) {
         return None;
     }
-    let mut png = Vec::new();
-    image::DynamicImage::ImageRgb8(page)
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .ok()?;
-    Some(Figure {
-        data: png,
-        media_type: "image/png",
-        ext: "png",
-    })
+    encoded(image::DynamicImage::ImageRgb8(page))
 }
 
 /// Is a decoded image worth a figure?
@@ -1724,20 +1733,50 @@ fn is_picture(image: &image::DynamicImage) -> bool {
     }
 }
 
-fn decoded_png(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figure> {
+fn decoded_figure(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figure> {
     let image = crate::decode::figure_pixels(doc, stream, max_image_pixels)?;
     if !is_picture(&image) {
         return None;
     }
-    let mut png = Vec::new();
-    image
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .ok()?;
-    Some(Figure {
-        data: png,
-        media_type: "image/png",
-        ext: "png",
-    })
+    encoded(image)
+}
+
+/// JPEG quality for a newly decoded colour figure. On 9 put-together pages of a
+/// library scan: 53.1 MB as PNG; at 80, 12.7 MB and 35.1 dB PSNR at worst; at
+/// 90, 18.4 MB and 38.9 dB; at 95, 26.5 MB and 42.4 dB.
+const COLOUR_JPEG_QUALITY: u8 = 90;
+
+/// A newly decoded image as a figure: gray as PNG, which is small and exact for
+/// bilevel and gray drawings; colour as JPEG, as the scans and photos these
+/// come from are, at a quality of 90. A put-together colour page of 2,807 by
+/// 3,916 pixels was a PNG of 1.95 MB.
+fn encoded(image: image::DynamicImage) -> Option<Figure> {
+    let mut data = Vec::new();
+    match image {
+        image::DynamicImage::ImageLuma8(_) => {
+            image
+                .write_to(
+                    &mut std::io::Cursor::new(&mut data),
+                    image::ImageFormat::Png,
+                )
+                .ok()?;
+            Some(Figure {
+                data,
+                media_type: "image/png",
+                ext: "png",
+            })
+        }
+        image => {
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut data, COLOUR_JPEG_QUALITY)
+                .encode_image(&image.into_rgb8())
+                .ok()?;
+            Some(Figure {
+                data,
+                media_type: "image/jpeg",
+                ext: "jpg",
+            })
+        }
+    }
 }
 
 /// The JPEG inside a stream whose last filter is DCTDecode. With DCTDecode

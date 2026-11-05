@@ -356,12 +356,14 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 - OCR with the Latin model takes about twice as long as with ocrs's: 261 s for a
   292-page scan on 10 cores.
 - Figures are placed after their page's text, not at their exact position.
+  Newly decoded colour figures are JPEGs at quality 90, gray ones PNGs.
   Indexed-colour and CMYK raw images are skipped, and newly decodable images
   that do not look like pictures (under 10,000 pixels; gray ones longer than 8
   times their width or under 1.5% ink). About 16 fragments of larger drawings in
   two books still pass as figures.
 - A scan with a text layer keeps a text-less page's image as a figure (a cover,
-  a plate) unless it is blank. A page built of layers is put together as library
+  a plate) unless it is blank; that figure's box is the whole page, and the page
+  reports no problem. Other figures have no box yet. A page built of layers is put together as library
   scans build it: one background and colour layers through soft masks, all
   taken to fill the page; other layouts of layers are not drawn.
 - A document classified as a scan goes through OCR on every page, and scans yield

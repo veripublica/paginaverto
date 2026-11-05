@@ -814,8 +814,9 @@ fn pattern(n: usize) -> Vec<u32> {
         .collect()
 }
 
-/// The one figure a text-layer page with this image gives, decoded.
-fn the_figure(dict: lopdf::Dictionary, stored: Vec<u8>) -> image::DynamicImage {
+/// The one figure a text-layer page with this image gives, decoded, with its
+/// media type.
+fn the_figure_as(dict: lopdf::Dictionary, stored: Vec<u8>) -> (&'static str, image::DynamicImage) {
     let text = "A sentence of ordinary words. ".repeat(4);
     let bytes = pdf(
         simple_font,
@@ -838,8 +839,17 @@ fn the_figure(dict: lopdf::Dictionary, stored: Vec<u8>) -> image::DynamicImage {
         })
         .collect();
     assert_eq!(figures.len(), 1);
-    assert_eq!(figures[0].media_type, "image/png");
-    image::load_from_memory(&figures[0].data).unwrap()
+    (
+        figures[0].media_type,
+        image::load_from_memory(&figures[0].data).unwrap(),
+    )
+}
+
+/// The same, for a gray figure, which comes as an exact PNG.
+fn the_figure(dict: lopdf::Dictionary, stored: Vec<u8>) -> image::DynamicImage {
+    let (media_type, image) = the_figure_as(dict, stored);
+    assert_eq!(media_type, "image/png");
+    image
 }
 
 fn image_dict(filter: &str, colour: &str, bits: i64) -> lopdf::Dictionary {
@@ -876,7 +886,7 @@ fn a_group4_fax_figure_decodes_to_its_exact_pixels() {
 }
 
 #[test]
-fn a_lossless_jpeg_2000_figure_decodes_to_its_exact_pixels() {
+fn a_lossless_jpeg_2000_figure_decodes_exactly_in_gray_and_closely_in_colour() {
     let n = BLOCKS;
     let r = pattern(n * 3);
     let gray = the_figure(
@@ -886,14 +896,24 @@ fn a_lossless_jpeg_2000_figure_decodes_to_its_exact_pixels() {
     let want: Vec<u8> = blocks().map(|b| (r[b] & 255) as u8).collect();
     assert_eq!(gray.into_luma8().into_raw(), want);
 
-    let rgb = the_figure(
+    // Colour comes as a JPEG at quality 90: near, not exact.
+    let (media_type, rgb) = the_figure_as(
         image_dict("JPXDecode", "DeviceRGB", 8),
         include_bytes!("fixtures/pattern-rgb.jp2").to_vec(),
     );
+    assert_eq!(media_type, "image/jpeg");
     let want: Vec<u8> = blocks()
         .flat_map(|b| [r[b], r[b + n], r[b + 2 * n]].map(|v| (v & 255) as u8))
         .collect();
-    assert_eq!(rgb.into_rgb8().into_raw(), want);
+    let got = rgb.into_rgb8().into_raw();
+    assert_eq!(got.len(), want.len());
+    let mean_error = got
+        .iter()
+        .zip(&want)
+        .map(|(&a, &b)| f64::from(a.abs_diff(b)))
+        .sum::<f64>()
+        / want.len() as f64;
+    assert!(mean_error < 4.0, "mean error {mean_error}");
 }
 
 #[test]
