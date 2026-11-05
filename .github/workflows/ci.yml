@@ -28,15 +28,17 @@ jobs:
             echo "error: the default build pulls ocrs/rten" >&2; exit 1
           fi
 
-      - name: Clippy (default, then ocr)
+      - name: Clippy (default, ocr, cli)
         run: |
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo clippy --workspace --all-targets --locked --features paginaverto/ocr -- -D warnings
+          cargo clippy --workspace --all-targets --locked --features paginaverto/cli -- -D warnings
 
-      - name: Test (default, then ocr)
+      - name: Test (default, ocr, cli)
         run: |
           cargo test --workspace --locked
           cargo test --workspace --locked --features paginaverto/ocr
+          cargo test --workspace --locked --features paginaverto/cli
 
       # The browser crate must keep compiling for wasm32 (lopdf's getrandom
       # needs its Web Crypto backend there).
@@ -71,7 +73,7 @@ jobs:
           rustup default "${{ steps.msrv.outputs.version }}"
 
       - name: Compile at the floor
-        run: cargo check --workspace --locked --features paginaverto/ocr
+        run: cargo check --workspace --locked --features paginaverto/cli
 
   # RustSec audit of Cargo.lock, its own job: its verdict depends on the
   # advisory database, not on our commit.

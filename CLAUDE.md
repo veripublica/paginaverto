@@ -1,8 +1,9 @@
 # paginaverto
 
 Reads PDFs and page images and turns them into a structured document: a Rust
-library (a CLI comes in 0.2). A veripublica family tool. epublift is the
-first consumer: it builds EPUBs from paginaverto's output.
+library and a CLI (`cli` feature; `convert` waits for the document format). A
+veripublica family tool. epublift is the first consumer: it builds EPUBs from
+paginaverto's output.
 
 - **Repo:** `github.com/veripublica/paginaverto` (public, `main`).
 - **License:** `AGPL-3.0-only OR LicenseRef-veripublica-Commercial`. Never
@@ -46,9 +47,9 @@ first consumer: it builds EPUBs from paginaverto's output.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy --workspace --all-targets --locked --features paginaverto/ocr -- -D warnings
-cargo test --workspace --locked && cargo test --workspace --locked --features paginaverto/ocr
-cargo +1.97 check --workspace --locked --features paginaverto/ocr
+cargo clippy --workspace --all-targets --locked --features paginaverto/cli -- -D warnings
+cargo test --workspace --locked && cargo test --workspace --locked --features paginaverto/cli
+cargo +1.97 check --workspace --locked --features paginaverto/cli
 ```
 
 ## Releasing

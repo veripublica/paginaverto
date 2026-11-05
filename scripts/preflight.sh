@@ -90,8 +90,9 @@ curl -sf "https://registry.npmjs.org/@veripublica%2fpaginaverto-wasm/$V" >/dev/n
 check "cargo fmt --all --check" cargo fmt --all --check
 check "clippy, default (-D warnings)" cargo clippy --workspace --all-targets --locked -- -D warnings
 check "clippy, ocr (-D warnings)" cargo clippy --workspace --all-targets --locked --features paginaverto/ocr -- -D warnings
+check "clippy, cli (-D warnings)" cargo clippy --workspace --all-targets --locked --features paginaverto/cli -- -D warnings
 check "clippy, paginaverto-wasm for wasm32" cargo clippy -p paginaverto-wasm --target wasm32-unknown-unknown --locked -- -D warnings
-for feat in "" "paginaverto/ocr"; do
+for feat in "" "paginaverto/ocr" "paginaverto/cli"; do
   label="cargo test${feat:+ --features $feat}"
   if out=$(cargo test --workspace --locked ${feat:+--features "$feat"} 2>&1); then
     sum=$(grep '^test result:' <<< "$out" | awk '{p+=$4; f+=$6; i+=$8} END {print p" passed, "f" failed, "i" ignored"}')
@@ -131,7 +132,7 @@ else
 fi
 MSRV=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
 if rustup run "$MSRV" rustc -V >/dev/null 2>&1; then
-  check "compiles at the MSRV ($MSRV)" rustup run "$MSRV" cargo check --workspace --locked --features paginaverto/ocr
+  check "compiles at the MSRV ($MSRV)" rustup run "$MSRV" cargo check --workspace --locked --features paginaverto/cli
 else
   skip "MSRV $MSRV not installed here (CI gates it)"
 fi

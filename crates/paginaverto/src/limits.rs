@@ -139,6 +139,19 @@ impl Limits {
         )
     }
 
+    /// Refuse too large a file before reading it. A file that cannot be read
+    /// is left for the load to report.
+    pub(crate) fn check_file(&self, input: Input<'_>) -> Result<(), Error> {
+        let bytes = match input {
+            Input::Path(p) => std::fs::metadata(p).map_or(0, |m| m.len()),
+            Input::Bytes(b) => b.len() as u64,
+        };
+        if bytes > self.max_file_bytes {
+            return Err(Self::exceeded(LimitKind::FileBytes, self.max_file_bytes));
+        }
+        Ok(())
+    }
+
     /// Load a PDF, its object streams bounded by the stream limit.
     pub(crate) fn load(&self, input: Input<'_>) -> Result<Document, Error> {
         let options =

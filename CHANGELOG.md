@@ -25,6 +25,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the caller had fetched the models. `Error` is `#[non_exhaustive]`, so this is
   additive; the npm package's `ErrorKind` gains the same name.
 
+- **A command-line tool, starting with `paginaverto inspect`.** It reports, page
+  by page, whether the text comes from a text layer, an OCR layer embedded over a
+  page image, or a scan only OCR can read, and lists the fonts with no usable
+  `/ToUnicode` map. It follows the family's CLI convention v0.7, with the shared
+  JSON report under `--format json`. From crates.io:
+  `cargo install --locked paginaverto --features cli`. The library has the same
+  thing as `paginaverto::inspect`.
 - **Limits (`Options::limits`):** the file's size, the number of pages, what one
   stream and one page's content may decode to, and the pixels of one image. Going
   over one refuses the document with `Error::LimitExceeded`, which names it. The

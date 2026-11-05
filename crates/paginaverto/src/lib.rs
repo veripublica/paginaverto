@@ -29,11 +29,13 @@ use std::path::Path;
 use lopdf::ObjectId;
 use parallel::Pool;
 
+mod inspect;
 mod limits;
 mod parallel;
 mod structure;
 mod text;
 
+pub use inspect::{FontInfo, Inspection, PageInfo, PageSource};
 pub use limits::{LimitKind, Limits};
 pub use parallel::{Cancel, PageDone, Progress};
 
@@ -243,7 +245,21 @@ impl std::error::Error for Error {}
 /// Never panics: a panic inside a dependency is caught and returned as
 /// [`Error::Internal`].
 pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
-    match catch_unwind(AssertUnwindSafe(|| pipeline(input, opts))) {
+    guarded(|| pipeline(input, opts))
+}
+
+/// Report what a PDF is made of, page by page, without reading it into a
+/// document. Follows the same [`Limits`] as [`read`], and needs no OCR. Uses
+/// `opts` for its limits, threads, cancel and progress.
+///
+/// Never panics, as [`read`] never does.
+pub fn inspect(input: Input<'_>, opts: &Options) -> Result<Inspection, Error> {
+    guarded(|| inspect::inspect(input, opts))
+}
+
+/// Turns a panic in a dependency into [`Error::Internal`].
+fn guarded<T>(run: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+    match catch_unwind(AssertUnwindSafe(run)) {
         Ok(result) => result,
         Err(payload) => {
             let msg = payload
@@ -258,17 +274,7 @@ pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
 
 fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
     let limits = &opts.limits;
-    let file_bytes = match input {
-        // A file that cannot be read is reported by the load below.
-        Input::Path(p) => std::fs::metadata(p).map_or(0, |m| m.len()),
-        Input::Bytes(b) => b.len() as u64,
-    };
-    if file_bytes > limits.max_file_bytes {
-        return Err(Limits::exceeded(
-            LimitKind::FileBytes,
-            limits.max_file_bytes,
-        ));
-    }
+    limits.check_file(input)?;
     let doc = limits.load(input)?;
     limits.check(&doc)?;
 
@@ -417,6 +423,7 @@ mod tests {
     #[test]
     fn public_types_are_send() {
         assert_send::<Book>();
+        assert_send::<Inspection>();
         assert_send::<Options>();
         assert_send::<Error>();
         assert_send::<Cancel>();

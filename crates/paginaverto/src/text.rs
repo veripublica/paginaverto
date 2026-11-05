@@ -23,7 +23,7 @@ pub(crate) enum Kind {
 
 /// A page counts as having text when its text-showing operators carry at
 /// least this many string bytes.
-const TEXT_FLOOR: usize = 100;
+pub(crate) const TEXT_FLOOR: usize = 100;
 
 /// A text layer on at least half the pages makes the document `TextLayer`.
 /// A document with no pages is a `Scan`.
@@ -49,7 +49,7 @@ pub(crate) fn classify(
 
 /// Bytes of string operands to `Tj`, `'`, `"` and `TJ`, undecoded. Robust
 /// where decoding fails (composite fonts), so it only tells presence.
-fn shown_bytes(doc: &Document, page_id: ObjectId) -> usize {
+pub(crate) fn shown_bytes(doc: &Document, page_id: ObjectId) -> usize {
     let Ok(content) = Content::decode(&doc.get_page_content(page_id)) else {
         return 0;
     };
@@ -97,7 +97,7 @@ pub(crate) fn is_born_digital(doc: &Document) -> bool {
 const FULL_PAGE_PIXELS: i64 = 400_000;
 
 /// Does the page carry an image of about a page's worth of pixels?
-fn has_full_page_image(doc: &Document, page_id: ObjectId) -> bool {
+pub(crate) fn has_full_page_image(doc: &Document, page_id: ObjectId) -> bool {
     resources(doc, page_id)
         .is_some_and(|res| images(doc, res).any(|s| pixel_area(s) > FULL_PAGE_PIXELS))
 }
@@ -829,6 +829,11 @@ fn widths(doc: &Document, dict: &Dictionary, subtype: &str) -> (HashMap<u32, f32
     (widths, dw)
 }
 
+/// Does the font have a `/ToUnicode` CMap that parses?
+pub(crate) fn has_usable_to_unicode(doc: &Document, font: &Dictionary) -> bool {
+    to_unicode(doc, font).is_some()
+}
+
 /// The font's `/ToUnicode` CMap, parsed.
 fn to_unicode(doc: &Document, font: &Dictionary) -> Option<(HashMap<u32, String>, usize)> {
     let stream = deref(doc, font.get(b"ToUnicode").ok()?)?.as_stream().ok()?;
@@ -975,7 +980,7 @@ fn hex_string(s: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // Resources and images
 
-fn deref<'a>(doc: &'a Document, o: &'a Object) -> Option<&'a Object> {
+pub(crate) fn deref<'a>(doc: &'a Document, o: &'a Object) -> Option<&'a Object> {
     match o {
         Object::Reference(id) => doc.get_object(*id).ok(),
         other => Some(other),
@@ -1005,8 +1010,30 @@ fn resources(doc: &Document, page_id: ObjectId) -> Option<&Dictionary> {
     None
 }
 
+/// A page attribute, inherited from the page tree if need be (at most 16
+/// levels up).
+pub(crate) fn inherited<'a>(
+    doc: &'a Document,
+    page_id: ObjectId,
+    key: &[u8],
+) -> Option<&'a Object> {
+    let mut cur = doc.get_object(page_id).ok().and_then(|o| o.as_dict().ok());
+    for _ in 0..16 {
+        let dict = cur?;
+        if let Some(value) = dict.get(key).ok().and_then(|o| deref(doc, o)) {
+            return Some(value);
+        }
+        cur = dict
+            .get(b"Parent")
+            .ok()
+            .and_then(|p| deref(doc, p))
+            .and_then(|o| o.as_dict().ok());
+    }
+    None
+}
+
 /// The page's font dictionaries by resource name.
-fn fonts(doc: &Document, page_id: ObjectId) -> Vec<(Vec<u8>, &Dictionary)> {
+pub(crate) fn fonts(doc: &Document, page_id: ObjectId) -> Vec<(Vec<u8>, &Dictionary)> {
     let Some(fonts) = resources(doc, page_id)
         .and_then(|r| r.get(b"Font").ok())
         .and_then(|o| deref(doc, o))
@@ -1070,7 +1097,7 @@ pub(crate) fn scan_image(doc: &Document, page_id: ObjectId) -> Option<Figure> {
 }
 
 /// The page's largest image; the first of equal largest wins.
-fn largest_image(doc: &Document, page_id: ObjectId) -> Option<&Stream> {
+pub(crate) fn largest_image(doc: &Document, page_id: ObjectId) -> Option<&Stream> {
     let res = resources(doc, page_id)?;
     let mut best: Option<(&Stream, i64)> = None;
     for s in images(doc, res) {
@@ -1091,17 +1118,22 @@ pub(crate) fn undecodable_scan(doc: &Document) -> Option<Vec<String>> {
         let Some(image) = largest_image(doc, id) else {
             continue;
         };
-        let name = match last_filter(image) {
-            Some(b"JBIG2Decode") => "JBIG2",
-            Some(b"JPXDecode") => "JPEG 2000",
-            Some(b"CCITTFaxDecode") => "CCITT fax",
-            _ => return None,
-        };
+        let name = undecodable_format(image)?;
         if !formats.iter().any(|f| f == name) {
             formats.push(name.to_string());
         }
     }
     (!formats.is_empty()).then_some(formats)
+}
+
+/// The image's format, if it is one this build cannot decode.
+pub(crate) fn undecodable_format(image: &Stream) -> Option<&'static str> {
+    match last_filter(image) {
+        Some(b"JBIG2Decode") => Some("JBIG2"),
+        Some(b"JPXDecode") => Some("JPEG 2000"),
+        Some(b"CCITTFaxDecode") => Some("CCITT fax"),
+        _ => None,
+    }
 }
 
 /// With a filter chain, the last filter names the format.

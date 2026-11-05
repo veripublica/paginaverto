@@ -11,8 +11,8 @@ Figures below name the versions they were measured on. Current version: 0.1.4.
 paginaverto reads PDFs and turns them into a structured document. It ships as a
 Rust library (crates `paginaverto` and `paginaverto-ocr`) and a WebAssembly
 package (`@veripublica/paginaverto-wasm`), released together under one version.
-There is no CLI yet: it comes in 0.2 with the document format, because dumping
-today's thin `Book` as JSON would freeze that format early. The web page at
+`main` has a CLI with `inspect` (below); `convert` waits for the document format,
+because dumping today's thin `Book` as JSON would freeze that format early. The web page at
 <https://veripublica.github.io/paginaverto/> runs the WebAssembly build; the
 file never leaves the browser.
 
@@ -134,6 +134,39 @@ SHA-256; check it before loading. The older `.rten` files (`MODELS`) still load,
 but the ocrs bucket no longer serves them (403 since at least 2026-10-31). Both
 forms carry the same models and gave byte-identical text on every scan measured.
 
+`inspect(input, &opts)` returns an `Inspection`: whether `read` would treat the
+document as a scan, each page's size and text source, and the fonts in use that
+have no usable `/ToUnicode`. It needs no OCR.
+
+### Command line
+
+Build with the `cli` feature (it also turns on `ocr`):
+`cargo install --locked paginaverto --features cli`. It follows CLI.md v0.7.
+
+```sh
+paginaverto inspect -i book.pdf
+paginaverto inspect -i a.pdf -i b.pdf --format json
+```
+
+Exit `0`: every input read, nothing makes its text unreadable. `1`: a font whose
+text cannot be decoded, or a scan with a page image that cannot be decoded. `2`:
+could not run, or could not read an input.
+
+`--format json` is the family's envelope (FORMATS.md). Tool-owned parts:
+
+- `summary`: `pages`, `text_layer`, `embedded_ocr`, `scan`, `empty`,
+  `reads_as_scan`, `errors`, `warnings`, `infos`.
+- `items`, every one a finding with `location` set to `page N` or the font's name:
+  - `PV-PAGE` (info), per page; `data`: `page`, `source`, `width`, `height`;
+  - `PV-IMAGE-UNDECODABLE` (error in a scan, warning otherwise); `data`: `page`,
+    `format`;
+  - `PV-FONT-UNREADABLE` (error) and `PV-FONT-NO-TOUNICODE` (info); `data`:
+    `subtype`, `pages`.
+
+The page source is read from what the page holds: a page of text over a whole-page
+image counts as `embedded_ocr`, whoever made that text. A simple font called
+readable can still decode wrongly, if its encoding names glyphs without meaning.
+
 ### WebAssembly
 
 `read(pdf: Uint8Array)` returns a `Book`; `version()` returns the version. The
@@ -208,6 +241,10 @@ plain `cargo update`.
 - **epublift's earlier numbers,** on one book each: about 99.8% word overlap for
   a born-digital book, about 92% word accuracy for OCR of a clean prose scan.
 
+- **`inspect`, `main` after 0.1.4,** 2026-11-05, same 18 PDFs: all read. The one
+  known JBIG2 scan reports 292 of 292 pages undecodable, exit `1`. In 7 of the PDFs
+  with text, 1 to 23 image-only pages are in a format that cannot be decoded; those
+  report warnings, exit `0`.
 - **Threads, `main` after 0.1.4,** 2026-11-05, same 18 PDFs on 10 cores: chapters,
   paragraphs and figures byte-identical to one thread and to the commit before.
   That is at 1 and 8 threads, and at 1, 2, 4 and 8 on the two scans. Text layers
@@ -233,8 +270,9 @@ Edition 2024, minimum Rust version 1.97.
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --locked --features paginaverto/ocr -- -D warnings
-cargo test --workspace --locked && cargo test --workspace --locked --features paginaverto/ocr
-cargo +1.97 check --workspace --locked --features paginaverto/ocr
+cargo clippy --workspace --all-targets --locked --features paginaverto/cli -- -D warnings
+cargo test --workspace --locked && cargo test --workspace --locked --features paginaverto/cli
+cargo +1.97 check --workspace --locked --features paginaverto/cli
 ```
 
 The OCR accuracy tool stays out of the workspace:

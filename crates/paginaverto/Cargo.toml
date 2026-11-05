@@ -21,9 +21,19 @@ default = []
 # through paginaverto-ocr; without it a scan is refused with
 # `Error::ScanNeedsOcr`.
 ocr = ["dep:paginaverto-ocr"]
+# The command-line tool and its JSON report. Not a default: the default build
+# must never pull ocrs or rten, and the tool reads scans.
+cli = ["ocr", "dep:serde", "dep:serde_json"]
+
+[[bin]]
+name = "paginaverto"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [dependencies]
 lopdf.workspace = true
 image.workspace = true
 regex.workspace = true
 paginaverto-ocr = { workspace = true, optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
