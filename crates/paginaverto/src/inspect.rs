@@ -147,7 +147,7 @@ fn look_at_page(doc: &Document, id: ObjectId, number: u32) -> Seen<'_> {
     } else {
         PageSource::Empty
     };
-    let (width, height) = visible_size(doc, id);
+    let (width, height) = text::Frame::of(doc, id).size();
     let undecodable_image = (source == PageSource::Scan)
         .then(|| text::largest_image(doc, id).and_then(text::undecodable_format))
         .flatten();
@@ -190,32 +190,4 @@ fn font_field(dict: &Dictionary, key: &[u8]) -> String {
         |_| String::new(),
         |n| String::from_utf8_lossy(n).into_owned(),
     )
-}
-
-/// The page's visible size: `/CropBox`, else `/MediaBox`, each inherited,
-/// swapped by a quarter turn of `/Rotate`.
-fn visible_size(doc: &Document, id: ObjectId) -> (f32, f32) {
-    let rect = text::inherited(doc, id, b"CropBox")
-        .and_then(|o| rect(doc, o))
-        .or_else(|| text::inherited(doc, id, b"MediaBox").and_then(|o| rect(doc, o)));
-    let Some([x0, y0, x1, y1]) = rect else {
-        return (0.0, 0.0);
-    };
-    let (w, h) = ((x1 - x0).abs(), (y1 - y0).abs());
-    let turned = text::inherited(doc, id, b"Rotate")
-        .and_then(|o| o.as_i64().ok())
-        .is_some_and(|r| r.rem_euclid(180) == 90);
-    if turned { (h, w) } else { (w, h) }
-}
-
-fn rect(doc: &Document, o: &Object) -> Option<[f32; 4]> {
-    let a = o.as_array().ok()?;
-    let mut out = [0.0; 4];
-    if a.len() != 4 {
-        return None;
-    }
-    for (slot, v) in out.iter_mut().zip(a) {
-        *slot = text::deref(doc, v)?.as_float().ok()?;
-    }
-    Some(out)
 }

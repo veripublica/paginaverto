@@ -11,8 +11,7 @@ Figures below name the versions they were measured on. Current version: 0.1.4.
 paginaverto reads PDFs and turns them into a structured document. It ships as a
 Rust library (crates `paginaverto` and `paginaverto-ocr`) and a WebAssembly
 package (`@veripublica/paginaverto-wasm`), released together under one version.
-`main` has a CLI with `inspect` (below); `convert` waits for the document format,
-because dumping today's thin `Book` as JSON would freeze that format early. The web page at
+`main` also has a CLI (below). The web page at
 <https://veripublica.github.io/paginaverto/> runs the WebAssembly build; the
 file never leaves the browser.
 
@@ -21,8 +20,8 @@ file never leaves the browser.
 (the same chapters, paragraphs, figures and refusals), and epublift builds on
 it. The one deliberate difference is in [Limits](#limits-of-01).
 
-What it reads into a `Book`, chapters with an optional title and their
-paragraphs and figures in reading order, from three kinds of PDF:
+What it reads into a `Document`, metadata, pages, and headings, paragraphs and
+figures in reading order, from three kinds of PDF:
 
 1. **Born-digital,** with a text layer. Simple fonts and composite (Type0/CID)
    fonts with a `/ToUnicode` map are read. Word spaces come from the fonts' real
@@ -32,13 +31,14 @@ paragraphs and figures in reading order, from three kinds of PDF:
    [ocrs](https://github.com/robertknight/ocrs), behind the `ocr` feature.
 
 It then removes running heads and feet and page numbers, joins words split by a
-line-break hyphen, and finds the headings that start chapters (by capitals, or
-by font size on born-digital pages).
+line-break hyphen, and finds the headings. Chapters start where the PDF's own
+outline says, when it is a real table of contents. Otherwise a heading is what
+looks like one (capitals, or a large font on a born-digital page), and a printed
+table of contents, if the book has one, tells the chapters from the subheadings.
 
-Where it is going, from 0.2: a structured document with headings, paragraphs,
-lists, figures and captions, and footnotes linked to where they are referenced.
-Each part carries its language, reading direction, source page and position,
-and recognition confidence. Page images as input too.
+Where it is going: lists, captions and footnotes linked to where they are
+referenced, figures at their positions, language and reading direction on each
+part, and page images as input. The format already has room for them.
 
 Rules the code follows:
 
@@ -48,8 +48,7 @@ Rules the code follows:
   the caller as bytes.
 - **The default build never pulls ocrs or rten.** CI checks it.
 - **The seam between the two crates is positioned text:** OCR yields `Line`s, so
-  the PDF side and the structure step never depend on the OCR engine. The boxes
-  on `Line` stay empty until 0.2.
+  the PDF side and the structure step never depend on the OCR engine.
 
 ## What it declines to do
 
@@ -77,7 +76,7 @@ package is `@veripublica/paginaverto-wasm` on npm. It reads text layers only.
 ## API
 
 ```rust
-pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error>;
+pub fn read(input: Input<'_>, opts: &Options) -> Result<Document, Error>;
 
 enum Input<'a> { Path(&'a Path), Bytes(&'a [u8]) }
 #[non_exhaustive] struct Options {
@@ -85,9 +84,27 @@ enum Input<'a> { Path(&'a Path), Bytes(&'a [u8]) }
     threads: Option<usize>, cancel: Cancel, progress: Option<Progress>,
 }
 enum Ocr { Off, Models { detection: Vec<u8>, recognition: Vec<u8> } }
-#[non_exhaustive] struct Book { chapters: Vec<Chapter> }
-struct Chapter { title: Option<String>, blocks: Vec<Block> }
-#[non_exhaustive] enum Block { Paragraph(String), Figure(Figure) }
+#[non_exhaustive] struct Document {
+    language: Option<String>, metadata: Metadata, pages: Vec<Page>, blocks: Vec<Block>,
+}
+impl Document { fn chapters(&self) -> Vec<Chapter<'_>>; }
+struct Chapter<'a> { title: Option<String>, blocks: &'a [Block] }
+struct Metadata {
+    info: BTreeMap<String, String>, xmp: Option<String>,
+    catalog_lang: Option<String>, outline: Vec<OutlineEntry>,
+}
+struct OutlineEntry { level: u32, title: String, page: Option<u32> }
+struct Page {
+    number: u32, width: f32, height: f32,
+    text_source: TextSource, problems: Vec<PageProblem>,
+}
+enum TextSource { TextLayer, EmbeddedOcr, Ocr, None }
+enum PageProblem { OcrFailed, UndecodableImage(Option<&'static str>), ImageNotRead }
+struct Block { id: String, kind: BlockKind, boxes: Vec<BlockBox>, confidence: Option<f32> }
+impl Block { fn text(&self) -> String; fn runs(&self) -> &[Run]; fn level(&self) -> Option<u32>; }
+enum BlockKind { Heading { level: u32, runs: Vec<Run> }, Paragraph { runs: Vec<Run> }, Figure(Figure) }
+struct Run { text: String, italic: bool }
+struct BlockBox { page: u32, x: f32, y: f32, width: f32, height: f32 }
 struct Figure { data: Vec<u8>, media_type: &'static str, ext: &'static str }
 #[non_exhaustive] enum Error {
     Open(String), ScanNeedsOcr, LanguageRequired, Models(String),
@@ -102,16 +119,82 @@ A scan's checks come in this order: images no build can decode yet
 of them), then OCR off, then language missing, then models.
 
 ```rust
-use paginaverto::{Block, Input, Options, read};
+use paginaverto::{Input, Options, read};
 
-let book = read(Input::Path("book.pdf".as_ref()), &Options::default())?;
-for chapter in &book.chapters {
+let doc = read(Input::Path("book.pdf".as_ref()), &Options::default())?;
+for chapter in doc.chapters() {
     println!("{:?}", chapter.title);
-    for block in &chapter.blocks {
-        if let Block::Paragraph(text) = block {
-            println!("{text}");
-        }
+    for block in chapter.blocks {
+        println!("{}", block.text()); // empty for a figure
     }
+}
+for page in doc.pages.iter().filter(|p| !p.problems.is_empty()) {
+    println!("page {}: {:?}", page.number, page.problems);
+}
+```
+
+### The document
+
+Blocks are one flat list in reading order; a chapter is the span after a heading
+of level 1. Rules that hold across the Rust types and the CLI's file:
+
+- **Pages** are numbered from 1. `text_source` is `text_layer`, `embedded_ocr`,
+  `ocr` or `none`. `embedded_ocr` did not go through ocrs or its alphabet.
+- **A page that cannot be read does not fail the document.** `problems` holds
+  `ocr_failed`, `undecodable_images`, or `image_not_read`: a page with only an
+  image, in a document read from its text layer, where OCR does not run. Whole
+  documents are still refused, as `Error` lists.
+- **Boxes** are in PDF points from the visible page's top left, after its
+  rotation, one per page a block touches. For text they follow the font's size
+  rather than the drawn glyphs. An empty list means the position is not known:
+  a figure, a title only the outline holds, a page read through lopdf (most
+  embedded OCR layers), and OCR on a turned page.
+- **Heading levels.** With a real outline, an entry found on its page or the next
+  is a heading at its level. A top-level entry found on neither still starts a
+  chapter, with the outline's title, at the top of its page. A single entry at the
+  top gives way to the level below it. A heading the outline does not know sits
+  below every level it has. Without an outline, a heading that a printed table of
+  contents lists is level 1 and one it does not list is level 2; with no such page
+  every heading is level 1. A heading other than an outline entry needs 400
+  characters of body after it, or it stays a paragraph.
+- **An outline is a table of contents** when at least half its entries have a page
+  and at least half have distinct titles. Scanning software writes one entry per
+  page named after its number; those are ignored and still given raw in `metadata`.
+- **Italics** come from the font: its name, its slant or its italic flag. Text read
+  through lopdf or OCR has none.
+- **`language`** is the option, else the catalog's `/Lang`, else none. Nothing is
+  guessed. **`confidence`** is always `None`: ocrs gives only a character and a
+  rectangle.
+
+Not produced yet, though the format has room: `footnote`, `list`, `caption` and
+`table` blocks, figure boxes, and language or direction below the document.
+
+The CLI's file has the same shape as JSON. `schema_version` (`SCHEMA_VERSION`, 1)
+rises only for a breaking change; new kinds and fields do not raise it. A reader
+shows a kind it does not know as a paragraph, from its `runs`.
+
+```json
+{
+  "schema_version": 1,
+  "producer": { "tool": "paginaverto", "version": "0.2.0" },
+  "language": "tr",
+  "metadata": {
+    "info": { "Title": "…" }, "xmp": null, "catalog_lang": "tr",
+    "outline": [ { "level": 1, "title": "…", "page": 7 } ]
+  },
+  "pages": [
+    { "number": 7, "width": 419.5, "height": 595.3, "text_source": "text_layer", "problems": [] }
+  ],
+  "blocks": [
+    { "id": "b1", "kind": "heading", "level": 1, "runs": [ { "text": "…" } ],
+      "boxes": [ { "page": 7, "x": 72.0, "y": 90.5, "width": 200.0, "height": 18.0 } ],
+      "confidence": null },
+    { "id": "b2", "kind": "paragraph",
+      "runs": [ { "text": "…" }, { "text": "…", "italic": true } ],
+      "boxes": [], "confidence": null },
+    { "id": "b3", "kind": "figure", "file": "figures/fig001.jpg",
+      "media_type": "image/jpeg", "boxes": [] }
+  ]
 }
 ```
 
@@ -144,15 +227,31 @@ Build with the `cli` feature (it also turns on `ocr`):
 `cargo install --locked paginaverto --features cli`. It follows CLI.md v0.7.
 
 ```sh
+paginaverto -i book.pdf                 # convert, the default: writes book.zip
+paginaverto convert -i scan.pdf --language tr --ocr-models models/ -o scan.zip
 paginaverto inspect -i book.pdf
 paginaverto inspect -i a.pdf -i b.pdf --format json
 ```
 
-Exit `0`: every input read, nothing makes its text unreadable. `1`: a font whose
-text cannot be decoded, or a scan with a page image that cannot be decoded. `2`:
-could not run, or could not read an input.
+`convert` takes one input and writes a zip of `document.json` and `figures/`:
+`-o`, `-f`, `--language`, `--ocr-models <DIR>` (the `.onnx` files, else the
+`.rten`), `--threads`, `--format`. It never replaces a file without `-f`, never
+writes over its input, and a partial file never takes the output's name.
 
-`--format json` is the family's envelope (FORMATS.md). Tool-owned parts:
+Exit `0`: the document was written. `1`: written, but a scan lost text on a page.
+`2`: could not run, or the PDF was refused, and nothing was written.
+
+Its `--format json` adds `output`, and `summary` holds `pages`, `chapters`,
+`blocks`, `figures`, `text_layer`, `embedded_ocr`, `ocr`, `none`, `errors`,
+`warnings`. Its `items` are findings on `page N`, with `data` `page`, `problem`:
+`PV-OCR-FAILED` (error), `PV-IMAGE-UNDECODABLE` (error in a document read by OCR,
+warning otherwise), `PV-IMAGE-NOT-READ` (warning).
+
+`inspect` takes one input or more. Exit `0`: every input read, nothing makes its
+text unreadable. `1`: a font whose text cannot be decoded, or a scan with a page
+image that cannot be decoded. `2`: could not run, or could not read an input.
+
+`--format json` is the family's envelope (FORMATS.md). `inspect`'s tool-owned parts:
 
 - `summary`: `pages`, `text_layer`, `embedded_ocr`, `scan`, `empty`,
   `reads_as_scan`, `errors`, `warnings`, `infos`.
@@ -170,9 +269,11 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 ### WebAssembly
 
 `read(pdf: Uint8Array)` returns a `Book`; `version()` returns the version. The
-`.d.ts` declares `Book`, `Chapter`, `Block` (a union you narrow on `kind`:
-`"paragraph"` with `text`, `"figure"` with `mediaType`, `ext` and `data`),
-`ErrorKind` and `PaginavertoError`, which is what `read` throws.
+`.d.ts` declares `Book` (`language`, `outline`, `pages`, `chapters`), `Page`,
+`OutlineEntry`, `Chapter`, `Run`, `Block` (a union you narrow on `kind`:
+`"paragraph"` with `text` and `runs`, and `level` when it is a subheading;
+`"figure"` with `mediaType`, `ext` and `data`), `ErrorKind` and
+`PaginavertoError`, which is what `read` throws.
 
 ## Limits of 0.1
 
@@ -186,7 +287,6 @@ stays here.
   JPEG 2000, CCITT, JBIG2 and CMYK images are skipped.
 - A document classified as a scan goes through OCR on every page, and scans yield
   no figures.
-- An OCR failure on one page gives an empty page, silently.
 - Tables and equations come out as plain text.
 - A PDF made only of vector drawings cannot be read: it has no text layer and no
   image to recognise.
@@ -194,7 +294,12 @@ stays here.
   during the load or while OCR's models load.
 - The limits bound the work, but are no guarantee of a memory ceiling: a page's
   content is parsed into many times its own size.
-- The language is required for OCR but not used yet.
+- The language is required for OCR, and recorded, but OCR does not use it.
+- Chapters from a printed table of contents and from the look of the text are
+  counted, not checked against a reference. See [Measurements](#measurements).
+- An outline's chapter that is found on neither its page nor the next starts at
+  the top of its page, wherever its text really begins, and its printed title stays
+  in the text as a paragraph.
 
 The one deliberate difference from epublift cli-v4.5.1, since 0.1.4: figures with
 filters in front of `DCTDecode` (`/Filter [/FlateDecode /DCTDecode]`) have those
@@ -241,6 +346,23 @@ plain `cargo update`.
 - **epublift's earlier numbers,** on one book each: about 99.8% word overlap for
   a born-digital book, about 92% word accuracy for OCR of a clean prose scan.
 
+- **Chapters, `main` after 0.1.4,** 2026-11-05, same 18 PDFs, against the commit
+  before. Eleven are byte-identical, and one is refused the same. Three kept every
+  word and only changed levels, with no usable outline, so a printed table of
+  contents decided: 154 to 23, 223 to 56 and 28 to 23 chapters. Their outlines,
+  where they have one, are one entry per page with 1 or 3 distinct titles among 299
+  and 570, and one more of that kind is ignored at 8 of 37. Three have real outlines
+  and now have one chapter per top-level entry, plus what comes before the first:
+  5 to 6 (6 entries), 9 to 13 (12), 9 to 45 (44). They lost no letters. Of those 62
+  entries, 31 were found on their page or the next, 31 are titles only the outline
+  holds.
+- **Italics, `main` after 0.1.4,** 2026-11-05, on one Turkish book against Mistral's
+  export, which is not ground truth. Of Mistral's 107 italic spans counted here, 102
+  are italic in ours and 105 are in our text at all. Ours has 169 italic runs, 100 of
+  which Mistral marks; whether the other 69 are right is not known.
+- **Boxes, `main` after 0.1.4,** 2026-11-05, share of text blocks with a position:
+  99 to 100% on 9 PDFs, 43 to 85% on 3, and 0 to 4% on 5, which are read through
+  lopdf or by OCR on a turned page. One scan is refused.
 - **`inspect`, `main` after 0.1.4,** 2026-11-05, same 18 PDFs: all read. The one
   known JBIG2 scan reports 292 of 292 pages undecodable, exit `1`. In 7 of the PDFs
   with text, 1 to 23 image-only pages are in a format that cannot be decoded; those

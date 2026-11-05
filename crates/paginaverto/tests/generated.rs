@@ -5,7 +5,7 @@ use lopdf::content::{Content, Operation};
 use lopdf::{Document, Object, Stream, dictionary};
 #[cfg(feature = "ocr")]
 use paginaverto::Ocr;
-use paginaverto::{Block, Error, Input, Options, read};
+use paginaverto::{Block, BlockKind, Error, Input, Options, read};
 
 /// A one-page-per-content PDF whose pages share `font` (as `/F1`) and, when
 /// given, an image XObject (as `/Im1`).
@@ -99,13 +99,10 @@ fn type0_font(doc: &mut Document, doc_chars: &[char]) -> Object {
 
 fn paragraphs(bytes: &[u8]) -> Vec<String> {
     let book = read(Input::Bytes(bytes), &Options::default()).expect("read");
-    book.chapters
+    book.blocks
         .iter()
-        .flat_map(|c| &c.blocks)
-        .filter_map(|b| match b {
-            Block::Paragraph(p) => Some(p.clone()),
-            _ => None,
-        })
+        .filter(|b| matches!(b.kind, BlockKind::Paragraph { .. }))
+        .map(Block::text)
         .collect()
 }
 
@@ -218,7 +215,8 @@ fn heading_starts_a_chapter_and_running_head_goes() {
     }
     let bytes = pdf(simple_font, None, &pages);
     let book = read(Input::Bytes(&bytes), &Options::default()).unwrap();
-    let titles: Vec<_> = book.chapters.iter().map(|c| c.title.as_deref()).collect();
+    let chapters = book.chapters();
+    let titles: Vec<_> = chapters.iter().map(|c| c.title.as_deref()).collect();
     assert_eq!(titles, vec![None, Some("CHAPTER TWO")]);
     let all: String = paragraphs(&bytes).join("\n");
     assert!(!all.contains("RUNNING HEAD"), "running head kept");
@@ -382,8 +380,8 @@ fn an_image_inherited_from_the_page_tree_counts_as_a_full_page() {
     let mut bytes = Vec::new();
     doc.save_to(&mut bytes).unwrap();
     let book = read(Input::Bytes(&bytes), &Options::default()).unwrap();
-    let blocks = book.chapters.iter().flat_map(|c| &c.blocks);
-    assert!(!blocks.into_iter().any(|b| matches!(b, Block::Figure(_))));
+    let mut blocks = book.blocks.iter();
+    assert!(!blocks.any(|b| matches!(b.kind, BlockKind::Figure(_))));
 }
 
 #[test]
@@ -519,11 +517,10 @@ fn figures_of(filter: Object, parms: Option<Object>, stored: Vec<u8>) -> Vec<Vec
         ]],
     );
     let book = read(Input::Bytes(&bytes), &Options::default()).unwrap();
-    book.chapters
+    book.blocks
         .iter()
-        .flat_map(|c| &c.blocks)
-        .filter_map(|b| match b {
-            Block::Figure(f) => {
+        .filter_map(|b| match &b.kind {
+            BlockKind::Figure(f) => {
                 assert_eq!(f.media_type, "image/jpeg");
                 Some(f.data.clone())
             }
@@ -596,4 +593,195 @@ fn missing_file_is_open_error() {
     )
     .unwrap_err();
     assert!(matches!(err, Error::Open(_)), "{err:?}");
+}
+
+/// One text page per title, with an outline to them, and the fonts named.
+fn outlined(entries: &[(&str, Option<u32>)], font_name: &str) -> Vec<u8> {
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => font_name,
+        "Encoding" => "WinAnsiEncoding",
+    });
+    let mut kids: Vec<Object> = Vec::new();
+    for (title, _) in entries {
+        let body = format!("{title} ").repeat(30);
+        let ops = vec![
+            op("BT", vec![]),
+            op("Tf", vec!["F1".into(), 24.into()]),
+            op("Td", vec![72.into(), 700.into()]),
+            op("Tj", vec![Object::string_literal(title.to_string())]),
+            op("Tf", vec!["F1".into(), 12.into()]),
+            op("Td", vec![0.into(), Object::Integer(-40)]),
+            op("Tj", vec![Object::string_literal(body)]),
+            op("ET", vec![]),
+        ];
+        let content = doc.add_object(Stream::new(
+            dictionary! {},
+            Content { operations: ops }.encode().unwrap(),
+        ));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            "Contents" => content,
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+        });
+        kids.push(page.into());
+    }
+    let count = kids.len() as i64;
+    let pages: Vec<Object> = kids.clone();
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }),
+    );
+
+    let root = doc.new_object_id();
+    let ids: Vec<_> = entries.iter().map(|_| doc.new_object_id()).collect();
+    for (i, (title, target)) in entries.iter().enumerate() {
+        let mut node = dictionary! {
+            "Title" => Object::string_literal(title.to_string()),
+            "Parent" => root,
+        };
+        if let Some(t) = target {
+            node.set("Dest", vec![pages[*t as usize - 1].clone(), "Fit".into()]);
+        }
+        if i > 0 {
+            node.set("Prev", ids[i - 1]);
+        }
+        if let Some(next) = ids.get(i + 1) {
+            node.set("Next", *next);
+        }
+        doc.objects.insert(ids[i], Object::Dictionary(node));
+    }
+    doc.objects.insert(
+        root,
+        Object::Dictionary(dictionary! {
+            "First" => ids[0], "Last" => ids[ids.len() - 1],
+            "Count" => ids.len() as i64,
+        }),
+    );
+    let catalog = doc.add_object(dictionary! {
+        "Type" => "Catalog", "Pages" => pages_id, "Outlines" => root, "Lang" => Object::string_literal("tr"),
+    });
+    doc.trailer.set("Root", catalog);
+    let info = doc.add_object(dictionary! { "Title" => Object::string_literal("The Book") });
+    doc.trailer.set("Info", info);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn the_outline_sets_the_chapters_and_the_metadata_comes_through() {
+    let bytes = outlined(
+        &[
+            ("First Part", Some(1)),
+            ("Second Part", Some(2)),
+            ("Third Part", Some(3)),
+        ],
+        "Helvetica",
+    );
+    let doc = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+    let chapters = doc.chapters();
+    let titles: Vec<_> = chapters.iter().map(|c| c.title.as_deref()).collect();
+    assert_eq!(
+        titles,
+        [Some("First Part"), Some("Second Part"), Some("Third Part")]
+    );
+    assert_eq!(doc.language.as_deref(), Some("tr"));
+    assert_eq!(doc.metadata.catalog_lang.as_deref(), Some("tr"));
+    assert_eq!(doc.metadata.info["Title"], "The Book");
+    let pages: Vec<_> = doc.metadata.outline.iter().map(|e| e.page).collect();
+    assert_eq!(pages, [Some(1), Some(2), Some(3)]);
+    let first = &doc.blocks[0];
+    assert_eq!(first.boxes[0].page, 1);
+    assert!(
+        first.boxes[0].y < 150.0,
+        "from the top: {:?}",
+        first.boxes[0]
+    );
+    assert_eq!(doc.pages[0].height, 842.0);
+}
+
+#[test]
+fn an_outline_entry_without_a_target_costs_only_itself() {
+    let bytes = outlined(
+        &[
+            ("First Part", Some(1)),
+            ("Second Part", None),
+            ("Third Part", Some(3)),
+        ],
+        "Helvetica",
+    );
+    let doc = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+    let pages: Vec<_> = doc.metadata.outline.iter().map(|e| e.page).collect();
+    assert_eq!(pages, [Some(1), None, Some(3)]);
+}
+
+#[test]
+fn a_circular_outline_ends() {
+    let bytes = outlined(
+        &[("First Part", Some(1)), ("Second Part", Some(2))],
+        "Helvetica",
+    );
+    let mut doc = Document::load_mem(&bytes).unwrap();
+    let last = doc
+        .objects
+        .iter()
+        .find(|(_, o)| {
+            o.as_dict()
+                .is_ok_and(|d| d.get(b"Title").is_ok() && d.get(b"Prev").is_ok())
+        })
+        .map(|(id, _)| *id)
+        .unwrap();
+    let first = doc
+        .objects
+        .iter()
+        .find(|(_, o)| {
+            o.as_dict()
+                .is_ok_and(|d| d.get(b"Title").is_ok() && d.get(b"Next").is_ok())
+        })
+        .map(|(id, _)| *id)
+        .unwrap();
+    doc.get_object_mut(last)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Next", first);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    let got = read(Input::Bytes(&out), &Options::default()).unwrap();
+    assert_eq!(got.metadata.outline.len(), 2);
+}
+
+#[test]
+fn italic_runs_come_from_the_font() {
+    for (name, italic) in [("ABCDEF+Garamond-Italic", true), ("Helvetica", false)] {
+        let bytes = outlined(&[("First Part", Some(1)), ("Second Part", Some(2))], name);
+        let doc = read(Input::Bytes(&bytes), &Options::default()).unwrap();
+        let body = doc.blocks.iter().find(|b| b.level().is_none()).unwrap();
+        assert!(body.runs().iter().all(|r| r.italic == italic), "{name}");
+    }
+}
+
+#[test]
+fn outline_titles_do_not_hide_a_pdf_with_no_text() {
+    // Two pages of blank text from a font with no letters would be a refusal;
+    // outline titles must not turn it into a document.
+    let mut doc = Document::load_mem(&outlined(
+        &[("Long Enough", Some(1)), ("And Another", Some(2))],
+        "Helvetica",
+    ))
+    .unwrap();
+    for id in doc.get_pages().into_values() {
+        let content = doc.add_object(Stream::new(dictionary! {}, b"BT ET".to_vec()));
+        doc.get_object_mut(id)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("Contents", content);
+    }
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    assert!(read(Input::Bytes(&out), &Options::default()).is_err());
 }

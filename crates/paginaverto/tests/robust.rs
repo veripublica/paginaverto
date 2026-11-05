@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use lopdf::content::{Content, Operation};
 use lopdf::{Document, Object, Stream, dictionary};
-use paginaverto::{Block, Book, Cancel, Error, Input, LimitKind, Limits, Options, Progress, read};
+use paginaverto::{
+    Block, BlockKind, Cancel, Error, Input, LimitKind, Limits, Options, Progress, read,
+};
 
 /// A generated PDF, with `extra` adding to each page's dictionary.
 fn pdf(pages: usize, extra: impl Fn(&mut Document, &mut lopdf::Dictionary)) -> Vec<u8> {
@@ -66,14 +68,11 @@ fn with_limits(limits: Limits) -> Options {
     o
 }
 
-fn text(book: &Book) -> Vec<String> {
-    book.chapters
+fn text(book: &paginaverto::Document) -> Vec<String> {
+    book.blocks
         .iter()
-        .flat_map(|c| &c.blocks)
-        .filter_map(|b| match b {
-            Block::Paragraph(p) => Some(p.clone()),
-            _ => None,
-        })
+        .filter(|b| matches!(b.kind, BlockKind::Paragraph { .. }))
+        .map(Block::text)
         .collect()
 }
 

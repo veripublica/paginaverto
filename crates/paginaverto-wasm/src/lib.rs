@@ -11,6 +11,9 @@
 //!     b.kind === "paragraph" ? b.text : b.data; // figure: Uint8Array, b.mediaType
 //!   }
 //! }
+//! for (const p of book.pages) {
+//!   p.textSource; p.problems;      // where its text came from, what went wrong
+//! }
 //! ```
 //!
 //! Text layers only: a scan with no text layer throws, with
@@ -19,7 +22,7 @@
 #![warn(missing_docs)]
 
 use js_sys::{Array, Object, Reflect, Uint8Array};
-use paginaverto::{Block, Book, Error, Input, Options};
+use paginaverto::{Block, BlockKind, Document, Error, Input, Options};
 use wasm_bindgen::prelude::*;
 
 /// The shapes `read` returns and throws, for the generated `.d.ts`. The
@@ -29,12 +32,22 @@ use wasm_bindgen::prelude::*;
 // dead-code pass sees neither use on wasm32.
 #[allow(dead_code)]
 const TS_TYPES: &str = r#"
+/** A stretch of text with one style. */
+export interface Run {
+  text: string;
+  italic: boolean;
+}
+
 /** One piece of chapter content, in reading order. */
 export type Block =
   | {
       kind: "paragraph";
       /** The paragraph's text, whitespace collapsed to single spaces. */
       text: string;
+      /** The same text piece by piece, with what is shown in italics. */
+      runs: Run[];
+      /** A heading inside the chapter: how deep it sits, from 2. */
+      level?: number;
     }
   | {
       kind: "figure";
@@ -52,8 +65,31 @@ export interface Chapter {
   blocks: Block[];
 }
 
+/** One page of the PDF, in points. */
+export interface Page {
+  /** From 1. */
+  number: number;
+  width: number;
+  height: number;
+  textSource: "text_layer" | "embedded_ocr" | "ocr" | "none";
+  /** What went wrong on the page, such as `undecodable_images`. */
+  problems: string[];
+}
+
+/** An entry of the PDF's own outline, whatever it is worth. */
+export interface OutlineEntry {
+  level: number;
+  title: string;
+  /** From 1; `null` when it points nowhere this file can say. */
+  page: number | null;
+}
+
 /** What a PDF turned into. `chapters` is never empty. */
 export interface Book {
+  /** The content's language, if the file says. */
+  language: string | null;
+  outline: OutlineEntry[];
+  pages: Page[];
   chapters: Chapter[];
 }
 
@@ -129,24 +165,39 @@ fn set(target: &JsValue, key: &str, value: &JsValue) {
     let _ = Reflect::set(target, &key.into(), value);
 }
 
-fn to_js(book: &Book) -> JsValue {
+fn runs_js(block: &Block) -> Array {
+    let runs = Array::new();
+    for r in block.runs() {
+        let o = Object::new();
+        set(&o, "text", &r.text.as_str().into());
+        set(&o, "italic", &r.italic.into());
+        runs.push(&o);
+    }
+    runs
+}
+
+fn to_js(doc: &Document) -> JsValue {
     let chapters = Array::new();
-    for c in &book.chapters {
+    for c in doc.chapters() {
         let blocks = Array::new();
-        for b in &c.blocks {
+        for b in c.blocks {
             let o = Object::new();
-            match b {
-                Block::Paragraph(text) => {
-                    set(&o, "kind", &"paragraph".into());
-                    set(&o, "text", &text.into());
-                }
-                Block::Figure(f) => {
+            match &b.kind {
+                BlockKind::Figure(f) => {
                     set(&o, "kind", &"figure".into());
                     set(&o, "mediaType", &f.media_type.into());
                     set(&o, "ext", &f.ext.into());
                     set(&o, "data", &Uint8Array::from(f.data.as_slice()).into());
                 }
-                _ => continue,
+                // Anything else with text reads as a paragraph.
+                _ => {
+                    set(&o, "kind", &"paragraph".into());
+                    set(&o, "text", &b.text().into());
+                    set(&o, "runs", &runs_js(b));
+                    if let Some(level) = b.level() {
+                        set(&o, "level", &level.into());
+                    }
+                }
             }
             blocks.push(&o);
         }
@@ -159,7 +210,36 @@ fn to_js(book: &Book) -> JsValue {
         set(&ch, "blocks", &blocks);
         chapters.push(&ch);
     }
+    let pages = Array::new();
+    for p in &doc.pages {
+        let o = Object::new();
+        set(&o, "number", &p.number.into());
+        set(&o, "width", &p.width.into());
+        set(&o, "height", &p.height.into());
+        set(&o, "textSource", &p.text_source.name().into());
+        let problems = Array::new();
+        for problem in &p.problems {
+            problems.push(&problem.name().into());
+        }
+        set(&o, "problems", &problems);
+        pages.push(&o);
+    }
+    let outline = Array::new();
+    for e in &doc.metadata.outline {
+        let o = Object::new();
+        set(&o, "level", &e.level.into());
+        set(&o, "title", &e.title.as_str().into());
+        set(&o, "page", &e.page.map_or(JsValue::NULL, Into::into));
+        outline.push(&o);
+    }
     let out = Object::new();
+    set(
+        &out,
+        "language",
+        &doc.language.as_deref().map_or(JsValue::NULL, Into::into),
+    );
+    set(&out, "outline", &outline);
+    set(&out, "pages", &pages);
     set(&out, "chapters", &chapters);
     out.into()
 }

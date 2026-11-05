@@ -13,7 +13,7 @@
 
 use std::fmt;
 
-use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
+use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
 use rten::Model;
 
 /// Where the ocrs project publishes its models.
@@ -69,8 +69,8 @@ pub const MODELS: [ModelFile; 2] = [
 pub struct Line {
     /// The line's text, as ocrs gives it.
     pub text: String,
-    /// Where the line sits on the page image, in pixels. Always `None` in
-    /// 0.1.0; filled from 0.2.0 on.
+    /// Where the line sits on the page image, in pixels: the box around its
+    /// characters. `None` for a line without characters.
     pub bbox: Option<Rect>,
 }
 
@@ -151,15 +151,29 @@ impl Engine {
             .0
             .prepare_input(source)
             .map_err(|e| Error::Recognise(format!("prepare input: {e}")))?;
-        let text = self
+        let words = self
             .0
-            .get_text(&input)
+            .detect_words(&input)
             .map_err(|e| Error::Recognise(e.to_string()))?;
-        Ok(text
-            .lines()
+        let lines = self.0.find_text_lines(&input, &words);
+        let lines = self
+            .0
+            .recognize_text(&input, &lines)
+            .map_err(|e| Error::Recognise(e.to_string()))?;
+        Ok(lines
+            .into_iter()
+            .flatten()
             .map(|l| Line {
                 text: l.to_string(),
-                bbox: None,
+                bbox: (!l.chars().is_empty()).then(|| {
+                    let r = l.bounding_rect();
+                    Rect {
+                        x: r.left() as f32,
+                        y: r.top() as f32,
+                        width: r.width() as f32,
+                        height: r.height() as f32,
+                    }
+                }),
             })
             .collect())
     }

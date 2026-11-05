@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use lopdf::content::{Content, Operation};
 use lopdf::{Document, Object, Stream, dictionary};
-use paginaverto::{Block, Input, Options, read};
+use paginaverto::{Input, Options, read};
 
 const EN: &str = include_str!("corpus/en.txt");
 const TR: &str = include_str!("corpus/tr.txt");
@@ -349,18 +349,11 @@ fn measure(corpus: &str, layout: Layout) -> (f64, usize) {
     let book = read(Input::Bytes(&pdf(corpus, layout)), &Options::default()).expect("reads");
     let mut text = String::new();
     let mut paragraphs = 0;
-    for chapter in &book.chapters {
-        if let Some(t) = &chapter.title {
-            text.push_str(t);
+    for block in &book.blocks {
+        if !block.runs().is_empty() {
+            text.push_str(&block.text());
             text.push(' ');
             paragraphs += 1;
-        }
-        for b in &chapter.blocks {
-            if let Block::Paragraph(p) = b {
-                text.push_str(p);
-                text.push(' ');
-                paragraphs += 1;
-            }
         }
     }
     let (got, want) = (squash(&text), squash(corpus));

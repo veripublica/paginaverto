@@ -1,10 +1,6 @@
-//! paginaverto reads PDFs and turns them into a book: chapters of paragraphs
-//! and figures.
-//!
-//! **0.1.0 is a parity release.** It does exactly what epublift's PDF import
-//! did in cli-v4.5.1 (same chapters, paragraphs, figures and refusals), so
-//! that epublift can switch to it. Its known faults are kept on purpose and
-//! fixed from 0.2.0 on, each one measured.
+//! paginaverto reads PDFs and turns them into a structured [`Document`]: its
+//! metadata, its pages with where their text came from, and one flat list of
+//! headings, paragraphs and figures in reading order.
 //!
 //! Three kinds of PDF:
 //! 1. born-digital, with a text layer: the text is extracted directly;
@@ -15,8 +11,11 @@
 //! ```no_run
 //! use paginaverto::{Input, Options, read};
 //!
-//! let book = read(Input::Path("book.pdf".as_ref()), &Options::default())?;
-//! println!("{} chapters", book.chapters.len());
+//! let doc = read(Input::Path("book.pdf".as_ref()), &Options::default())?;
+//! println!("{} chapters", doc.chapters().len());
+//! for page in doc.pages.iter().filter(|p| !p.problems.is_empty()) {
+//!     println!("page {}: {:?}", page.number, page.problems);
+//! }
 //! # Ok::<(), paginaverto::Error>(())
 //! ```
 
@@ -29,14 +28,21 @@ use std::path::Path;
 use lopdf::ObjectId;
 use parallel::Pool;
 
+mod document;
 mod inspect;
 mod limits;
+mod outline;
 mod parallel;
 mod structure;
 mod text;
 
+pub use document::{
+    Block, BlockBox, BlockKind, Chapter, Document, Figure, Metadata, Page, PageProblem, Run,
+    SCHEMA_VERSION, TextSource,
+};
 pub use inspect::{FontInfo, Inspection, PageInfo, PageSource};
 pub use limits::{LimitKind, Limits};
+pub use outline::OutlineEntry;
 pub use parallel::{Cancel, PageDone, Progress};
 
 #[cfg(feature = "ocr")]
@@ -55,8 +61,8 @@ pub enum Input<'a> {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct Options {
-    /// Content language, a BCP-47 tag such as `tr`. Required for a scan
-    /// (one that needs OCR); otherwise unused in 0.1.0.
+    /// Content language, a BCP-47 tag such as `tr`, recorded as
+    /// [`Document::language`]. Required for a scan (one that needs OCR).
     pub language: Option<String>,
     /// Whether scans may be recognised, and with which models.
     pub ocr: Ocr,
@@ -107,58 +113,6 @@ impl fmt::Debug for Ocr {
     }
 }
 
-/// What a PDF turned into.
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct Book {
-    /// In reading order. Never empty: an empty result is an [`Error`].
-    pub chapters: Vec<Chapter>,
-}
-
-/// An optional heading and its content, in reading order.
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct Chapter {
-    /// The heading that starts the chapter. `None` for the content before
-    /// the first heading.
-    pub title: Option<String>,
-    /// Paragraphs and figures, in reading order. A page's figures come after
-    /// its text.
-    pub blocks: Vec<Block>,
-}
-
-/// One piece of chapter content.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum Block {
-    /// A paragraph's text, whitespace collapsed to single spaces.
-    Paragraph(String),
-    /// An image.
-    Figure(Figure),
-}
-
-/// An image from the PDF, as bytes ready to embed: a JPEG verbatim, or raw
-/// pixels re-encoded to PNG.
-#[derive(Clone)]
-#[non_exhaustive]
-pub struct Figure {
-    /// The image file's bytes.
-    pub data: Vec<u8>,
-    /// `image/jpeg` or `image/png`.
-    pub media_type: &'static str,
-    /// `jpg` or `png`.
-    pub ext: &'static str,
-}
-
-impl fmt::Debug for Figure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Figure")
-            .field("data", &format_args!("{} bytes", self.data.len()))
-            .field("media_type", &self.media_type)
-            .finish()
-    }
-}
-
 /// Why a PDF could not be read. The caller words the message for its user;
 /// `Display` gives a plain English one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,8 +156,8 @@ impl fmt::Display for Error {
         match self {
             Error::Open(e) => write!(f, "failed to open PDF: {e}"),
             Error::ScanNeedsOcr => f.write_str(
-                "this PDF looks like a scan with no text layer — OCR is needed, \
-                 which is not available yet (coming in a later release)",
+                "this PDF looks like a scan with no text layer, so it needs OCR, \
+                 which is off or not built in",
             ),
             Error::LanguageRequired => {
                 f.write_str("--language is required for scanned PDFs (e.g. --language tr)")
@@ -240,11 +194,14 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Read a PDF into a [`Book`].
+/// Read a PDF into a [`Document`].
+///
+/// A page that cannot be read does not fail the document: it is reported in
+/// [`Page::problems`]. Whole documents are refused, as [`Error`] lists.
 ///
 /// Never panics: a panic inside a dependency is caught and returned as
 /// [`Error::Internal`].
-pub fn read(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
+pub fn read(input: Input<'_>, opts: &Options) -> Result<Document, Error> {
     guarded(|| pipeline(input, opts))
 }
 
@@ -272,7 +229,7 @@ fn guarded<T>(run: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
     }
 }
 
-fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
+fn pipeline(input: Input<'_>, opts: &Options) -> Result<Document, Error> {
     let limits = &opts.limits;
     limits.check_file(input)?;
     let doc = limits.load(input)?;
@@ -300,8 +257,10 @@ fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
         }
     };
 
-    let chapters = structure::chapters(&pages);
-    if chapters.is_empty() {
+    let metadata = document::metadata(&doc);
+    let marks = outline::chapter_marks(&metadata.outline);
+    let built = structure::build(&pages, marks.as_deref());
+    if !built.has_content {
         return Err(match kind {
             text::Kind::Scan => Error::OcrFoundNothing,
             text::Kind::TextLayer if pages.iter().all(|p| p.blocks.is_empty()) => {
@@ -310,10 +269,29 @@ fn pipeline(input: Input<'_>, opts: &Options) -> Result<Book, Error> {
             text::Kind::TextLayer => Error::NoText,
         });
     }
-    if fails_quality_gate(&chapters) {
+    if built.fails_quality_gate {
         return Err(Error::QualityGate);
     }
-    Ok(Book { chapters })
+    let language = opts
+        .language
+        .clone()
+        .filter(|l| !l.is_empty())
+        .or_else(|| metadata.catalog_lang.clone());
+    Ok(Document {
+        language,
+        metadata,
+        pages: pages
+            .into_iter()
+            .map(|p| Page {
+                number: p.number,
+                width: p.size.0,
+                height: p.size.1,
+                text_source: p.source,
+                problems: p.problems,
+            })
+            .collect(),
+        blocks: built.blocks,
+    })
 }
 
 /// An error's message followed by each of its causes, `: `-separated, as
@@ -332,29 +310,6 @@ fn with_causes(e: &dyn std::error::Error) -> String {
         cause = c.source();
     }
     msg
-}
-
-/// Real prose is about 80% letters. When at least 50 non-space characters
-/// decoded and fewer than 45% of them are letters, the fonts did not decode.
-fn fails_quality_gate(chapters: &[Chapter]) -> bool {
-    let (mut nonspace, mut letters) = (0usize, 0usize);
-    let titles = chapters.iter().filter_map(|c| c.title.as_ref());
-    let paragraphs = chapters
-        .iter()
-        .flat_map(|c| &c.blocks)
-        .filter_map(|b| match b {
-            Block::Paragraph(p) => Some(p),
-            Block::Figure(_) => None,
-        });
-    for ch in titles.chain(paragraphs).flat_map(|p| p.chars()) {
-        if !ch.is_whitespace() {
-            nonspace += 1;
-            if ch.is_alphabetic() {
-                letters += 1;
-            }
-        }
-    }
-    nonspace >= 50 && (letters as f32) < nonspace as f32 * 0.45
 }
 
 /// Threads recognising pages, unless the caller chose a number. The models
@@ -386,20 +341,44 @@ fn scan_pages(
     let engine = paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
         .map_err(|e| Error::Models(e.to_string()))?;
     let pool = pool.at_most(OCR_THREADS);
-    pool.map(pages, opts.progress.as_ref(), |_, id| {
-        // A page whose image is missing, undecodable, or fails recognition
-        // becomes an empty page. The document format will report it.
-        let lines = text::scan_image(doc, id)
-            .and_then(|fig| engine.recognise(&fig.data).ok())
-            .unwrap_or_default();
-        text::Page {
-            blocks: lines
-                .iter()
-                .map(|l| text::squash(&l.text))
-                .filter(|l| !l.is_empty())
-                .collect(),
+    pool.map(pages, opts.progress.as_ref(), |number, id| {
+        let frame = text::Frame::of(doc, id);
+        let mut page = text::Page {
+            number,
+            size: frame.size(),
             ..text::Page::default()
+        };
+        // A page without an image has nothing to read. One whose image cannot
+        // be decoded, or fails recognition, is reported.
+        let Some(image) = text::largest_image(doc, id) else {
+            return page;
+        };
+        let Some(figure) = text::scan_image(doc, image) else {
+            let format = text::undecodable_format(image);
+            page.problems.push(PageProblem::UndecodableImage(format));
+            return page;
+        };
+        let Ok(lines) = engine.recognise(&figure.data) else {
+            page.problems.push(PageProblem::OcrFailed);
+            return page;
+        };
+        let pixels = text::pixels(image);
+        for line in &lines {
+            let clean = text::squash(&line.text);
+            if !clean.is_empty() {
+                let place = line.bbox.and_then(|r| {
+                    frame.place_pixels(number, pixels, (r.x, r.y, r.width, r.height))
+                });
+                page.blocks.push(text::TextBlock {
+                    place,
+                    ..text::TextBlock::plain(clean)
+                });
+            }
         }
+        if !page.blocks.is_empty() {
+            page.source = TextSource::Ocr;
+        }
+        page
     })
 }
 
@@ -422,7 +401,7 @@ mod tests {
 
     #[test]
     fn public_types_are_send() {
-        assert_send::<Book>();
+        assert_send::<Document>();
         assert_send::<Inspection>();
         assert_send::<Options>();
         assert_send::<Error>();

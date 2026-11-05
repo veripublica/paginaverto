@@ -25,13 +25,22 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the caller had fetched the models. `Error` is `#[non_exhaustive]`, so this is
   additive; the npm package's `ErrorKind` gains the same name.
 
-- **A command-line tool, starting with `paginaverto inspect`.** It reports, page
-  by page, whether the text comes from a text layer, an OCR layer embedded over a
-  page image, or a scan only OCR can read, and lists the fonts with no usable
-  `/ToUnicode` map. It follows the family's CLI convention v0.7, with the shared
-  JSON report under `--format json`. From crates.io:
+- **A structured document.** `read` returns a `Document`: the file's metadata and
+  outline, each page's size and where its text came from (`text_layer`,
+  `embedded_ocr`, `ocr` or `none`), and one flat list of headings with levels,
+  paragraphs and figures in reading order. Blocks carry their positions and italic
+  runs where the reading knows them. `Document::chapters()` gives the chapters.
+- **Pages that cannot be read are reported instead of silently left empty.**
+  `Page::problems` holds `ocr_failed`, `undecodable_images` or `image_not_read`, and
+  the rest of the document is still returned.
+- **A command-line tool.** `paginaverto -i book.pdf` writes `book.zip`, holding
+  `document.json` and `figures/`. `paginaverto inspect` reports, page by page,
+  whether the text comes from a text layer, an OCR layer embedded over a page image,
+  or a scan only OCR can read, and lists the fonts with no usable `/ToUnicode` map.
+  It follows the family's CLI convention v0.7, with the shared JSON report under
+  `--format json`. From crates.io:
   `cargo install --locked paginaverto --features cli`. The library has the same
-  thing as `paginaverto::inspect`.
+  report as `paginaverto::inspect`.
 - **Limits (`Options::limits`):** the file's size, the number of pages, what one
   stream and one page's content may decode to, and the pixels of one image. Going
   over one refuses the document with `Error::LimitExceeded`, which names it. The
@@ -44,6 +53,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Changed
 
+- **`read` returns a `Document`; `Book`, its `Chapter` and `Block` are gone.** This
+  is the breaking change of the release. `document.chapters()` replaces
+  `book.chapters`, and a block's text is `block.text()`. The npm package's `Book`
+  keeps its shape and gains `language`, `outline` and `pages`; a subheading in it is
+  a paragraph with a `level`.
+- **Chapters follow the PDF's own table of contents.** A real outline now sets them,
+  one per top-level entry: 9 to 45 chapters on a book with 44 entries, 9 to 13 with
+  12, 5 to 6 with 6. Outlines that only name each page are ignored. Without an
+  outline, a printed table of contents tells chapters from subheadings, which stay
+  in the chapter as headings of level 2: 223 to 56 and 154 to 23 chapters on two
+  books whose subheadings had each become a chapter. Measured by count only, since
+  these books have no reference for their chapters. PDFs with neither read as before.
+- **A scan refused for lack of OCR no longer says OCR is coming later.** It is here.
 - **Pages are read in parallel,** on every core but two (`Options::threads`). The
   output does not depend on the thread count: byte-identical on 18 PDFs at 1 and 8
   threads. Text layers read about 4 times faster on 10 cores. OCR uses at most 4

@@ -1,26 +1,34 @@
 //! paginaverto's CLI, following the **veripublica CLI convention v0.7**
 //! (<https://github.com/veripublica/conventions>).
 //!
+//! `convert`, the default, reads one PDF and writes the document to a zip.
 //! `inspect` reads and reports, for one input or more. Nothing here asks
 //! anything, so there are no prompts. The argument grammar is the family's
 //! (kepubverto's, imagoverto's), ported deliberately.
 
 #![forbid(unsafe_code)]
 
+mod convert;
+
 use std::process::ExitCode;
 
 use paginaverto::{FontInfo, Input, Inspection, Options, PageInfo, PageSource};
 use serde::Serialize;
 
+use convert::Job;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
-paginaverto — read PDFs and report what they are made of
+paginaverto — read a PDF into a structured document
 
 USAGE:
-    paginaverto inspect -i <PATH> [OPTIONS]
+    paginaverto -i <PATH> [OPTIONS]
+    paginaverto <SUBCOMMAND> [OPTIONS]
 
 SUBCOMMANDS:
+    convert     Read a PDF and write the document to a zip: the default. See
+                paginaverto convert --help.
     inspect     Report, page by page, where the text comes from. See
                 paginaverto inspect --help.
 
@@ -29,7 +37,51 @@ OPTIONS:
     -h, --help              Print this help to stdout and exit 0.
 
 EXAMPLES:
+    paginaverto -i book.pdf
     paginaverto inspect -i book.pdf
+
+Conforms to veripublica conventions v0.7.";
+
+const CONVERT_HELP: &str = "\
+paginaverto convert — read a PDF and write the document to a zip
+
+USAGE:
+    paginaverto convert -i <PATH> [OPTIONS]
+    paginaverto -i <PATH> [OPTIONS]
+
+OPTIONS:
+    -i, --input <PATH>      The input. The only input form; positional paths are
+                            not accepted.
+    -o, --output <PATH>     Where to write the output. Default: the input's name
+                            with .zip, beside it.
+    -f, --force             Permit replacing existing output files. Never lifts
+                            the output-equals-input refusal.
+        --language <TAG>    The language of the content (BCP-47, such as tr),
+                            recorded as the document's language. Required for a
+                            scan. Without it, the PDF's own /Lang is recorded.
+        --ocr-models <DIR>  The folder holding the OCR model files; the tool
+                            never downloads them. Without it, a scan is refused.
+        --threads <N>       How many threads do the work, 1 or more. The output
+                            never depends on it. Default: every core but two, at
+                            most four for OCR.
+        --format <FORMAT>   Report format: human (the default), or json: the
+                            shared machine envelope (one JSON object on stdout,
+                            see the veripublica FORMATS spec).
+    -V, --version           Print paginaverto <version> to stdout and exit 0.
+    -h, --help              Print this help to stdout and exit 0.
+
+The zip holds document.json and, if the PDF has any, figures/. A page that cannot
+be read does not stop the rest: it is reported, and the file records it.
+
+EXAMPLES:
+    paginaverto -i book.pdf
+    paginaverto convert -i scan.pdf --language tr --ocr-models models/ -o scan.zip
+
+EXIT CODES:
+    0   the document was written.
+    1   the document was written, but a scan lost text: a page's image could not
+        be decoded, or OCR failed on it.
+    2   paginaverto could not run, or the PDF was refused: nothing was written.
 
 Conforms to veripublica conventions v0.7.";
 
@@ -70,16 +122,22 @@ Conforms to veripublica conventions v0.7.";
 /// asserted here, never inherited.
 const CONVENTION: &str = "0.7";
 
+/// Which help text.
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Topic {
+    Tool,
+    Convert,
+    Inspect,
+}
+
 #[derive(Debug, PartialEq)]
 enum Cli {
-    /// `-h`/`--help`, for `inspect` if it was named.
-    Help {
-        inspect: bool,
-    },
+    Help(Topic),
     Version,
     /// The short problem message, without the `error:` prefix or the
     /// `--help` pointer main adds.
     Usage(String),
+    Convert(Job),
     Inspect {
         inputs: Vec<String>,
         json: bool,
@@ -93,19 +151,35 @@ enum Cli {
 /// value-taking option is always its value (`-i -q.pdf` names `-q.pdf`). The
 /// only bare word is a subcommand, and only as the first argument.
 fn parse(args: &[String]) -> Cli {
-    let (named, args) = match args.first().map(String::as_str) {
-        Some("inspect") => (true, &args[1..]),
-        _ => (false, args),
+    let (topic, args) = match args.first().map(String::as_str) {
+        Some("inspect") => (Topic::Inspect, &args[1..]),
+        Some("convert") => (Topic::Convert, &args[1..]),
+        _ => (Topic::Tool, args),
     };
+    let inspecting = topic == Topic::Inspect;
     let mut inputs: Vec<String> = Vec::new();
     let mut format: Option<String> = None;
-    let (mut help, mut version) = (false, false);
+    let mut output: Option<String> = None;
+    let mut language: Option<String> = None;
+    let mut models: Option<String> = None;
+    let mut threads: Option<String> = None;
+    let (mut help, mut version, mut force) = (false, false, false);
     let mut error: Option<String> = None;
 
     // Record the first usage error but keep scanning, so that a later `-h` can
     // still short-circuit a malformed line (§5).
     macro_rules! fail {
         ($($a:tt)*) => {{ if error.is_none() { error = Some(format!($($a)*)); } }};
+    }
+    // A single-valued option given twice is two answers to one question (§3.4).
+    macro_rules! once {
+        ($slot:ident, $name:expr, $value:expr) => {{
+            if $slot.is_some() {
+                fail!("option '{}' given more than once", $name);
+            } else {
+                $slot = Some($value);
+            }
+        }};
     }
 
     let mut i = 0;
@@ -118,10 +192,16 @@ fn parse(args: &[String]) -> Cli {
                 Some((n, v)) => (n, Some(v.to_string())),
                 None => (long, None),
             };
+            let takes_value = match name {
+                "input" | "format" => true,
+                "output" | "language" | "ocr-models" | "threads" => !inspecting,
+                _ => false,
+            };
             match name {
                 "help" => help = true,
                 "version" => version = true,
-                "input" | "format" => {
+                "force" if !inspecting => force = true,
+                _ if takes_value => {
                     let value = match attached {
                         Some(v) => v,
                         None => {
@@ -135,12 +215,13 @@ fn parse(args: &[String]) -> Cli {
                             }
                         }
                     };
-                    if name == "input" {
-                        inputs.push(value);
-                    } else if format.is_some() {
-                        fail!("option '--format' given more than once");
-                    } else {
-                        format = Some(value);
+                    match name {
+                        "input" => inputs.push(value),
+                        "format" => once!(format, "--format", value),
+                        "output" => once!(output, "--output", value),
+                        "language" => once!(language, "--language", value),
+                        "ocr-models" => once!(models, "--ocr-models", value),
+                        _ => once!(threads, "--threads", value),
                     }
                 }
                 _ => fail!("unexpected option '--{name}'"),
@@ -152,16 +233,19 @@ fn parse(args: &[String]) -> Cli {
                 match chars[j] {
                     'h' => help = true,
                     'V' => version = true,
-                    'i' => {
+                    'f' if !inspecting => force = true,
+                    c @ 'i' | c @ 'o' if c == 'i' || !inspecting => {
                         let rest: String = chars[j + 1..].iter().collect();
-                        if !rest.is_empty() {
-                            inputs.push(rest);
+                        let value = if !rest.is_empty() {
+                            Some(rest)
                         } else {
                             i += 1;
-                            match args.get(i) {
-                                Some(v) => inputs.push(v.clone()),
-                                None => fail!("option '-i' needs a value"),
-                            }
+                            args.get(i).cloned()
+                        };
+                        match value {
+                            Some(v) if c == 'i' => inputs.push(v),
+                            Some(v) => once!(output, "-o", v),
+                            None => fail!("option '-{c}' needs a value"),
                         }
                         break;
                     }
@@ -172,7 +256,7 @@ fn parse(args: &[String]) -> Cli {
                 }
                 j += 1;
             }
-        } else if arg == "inspect" {
+        } else if arg == "inspect" || arg == "convert" {
             fail!("the subcommand '{arg}' must come first");
         } else {
             fail!("unexpected argument '{arg}'; use -i {arg}");
@@ -188,9 +272,21 @@ fn parse(args: &[String]) -> Cli {
             false
         }
     };
+    if let Some(tag) = &language
+        && !is_language_tag(tag)
+    {
+        fail!("invalid value '{tag}' for --language; a BCP-47 tag, such as tr");
+    }
+    let threads = threads.and_then(|n| match n.parse::<usize>() {
+        Ok(n) if n >= 1 => Some(n),
+        _ => {
+            fail!("invalid value '{n}' for --threads; a number, 1 or more");
+            None
+        }
+    });
 
     if help {
-        return Cli::Help { inspect: named };
+        return Cli::Help(topic);
     }
     if let Some(message) = error {
         return Cli::Usage(message);
@@ -198,20 +294,49 @@ fn parse(args: &[String]) -> Cli {
     if version {
         return Cli::Version;
     }
-    if !named {
-        return Cli::Usage("missing subcommand; the one there is: inspect".into());
-    }
     if inputs.is_empty() {
         return Cli::Usage("missing required -i".into());
     }
-    Cli::Inspect { inputs, json }
+    if inspecting {
+        return Cli::Inspect { inputs, json };
+    }
+    if inputs.len() > 1 {
+        let n = inputs.len();
+        return Cli::Usage(format!("convert takes 1 input, {n} given"));
+    }
+    Cli::Convert(Job {
+        input: inputs.remove(0),
+        output,
+        force,
+        language,
+        models,
+        threads,
+        json,
+    })
+}
+
+/// The shape of a BCP-47 tag: subtags of letters and digits, the first letters
+/// only. Whether it names a language is the caller's business.
+fn is_language_tag(tag: &str) -> bool {
+    let mut parts = tag.split('-');
+    let first = parts.next().unwrap_or_default();
+    (2..=8).contains(&first.len())
+        && first.bytes().all(|b| b.is_ascii_alphabetic())
+        && parts.all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse(&args) {
-        Cli::Help { inspect } => {
-            println!("{}", if inspect { INSPECT_HELP } else { HELP });
+        Cli::Help(topic) => {
+            println!(
+                "{}",
+                match topic {
+                    Topic::Tool => HELP,
+                    Topic::Convert => CONVERT_HELP,
+                    Topic::Inspect => INSPECT_HELP,
+                }
+            );
             ExitCode::SUCCESS
         }
         Cli::Version => {
@@ -222,6 +347,7 @@ fn main() -> ExitCode {
             eprintln!("error: {message} (see --help)");
             ExitCode::from(2)
         }
+        Cli::Convert(job) => convert::run(&job),
         Cli::Inspect { inputs, json } => inspect(&inputs, json),
     }
 }
@@ -237,22 +363,15 @@ fn inspect(inputs: &[String], json: bool) -> ExitCode {
         reports.push(input_object(path, result));
     }
     let status = worst(&reports);
-    if json {
-        let envelope = Envelope {
-            tool: "paginaverto",
-            tool_version: VERSION,
-            convention: CONVENTION,
-            status,
-            inputs: reports,
-        };
-        match serde_json::to_string(&envelope) {
-            Ok(text) => println!("{text}"),
-            Err(e) => {
-                eprintln!("error: could not write the report: {e}");
-                return ExitCode::from(2);
-            }
-        }
+    if json && let Err(e) = Envelope::new(status, reports).print() {
+        eprintln!("error: could not write the report: {e}");
+        return ExitCode::from(2);
     }
+    report_status(status)
+}
+
+/// The exit code a report's status means (§6).
+fn report_status(status: &str) -> ExitCode {
     ExitCode::from(match status {
         "ok" => 0,
         "problems" => 1,
@@ -407,6 +526,23 @@ struct Envelope<'a> {
     inputs: Vec<InputObject<'a>>,
 }
 
+impl<'a> Envelope<'a> {
+    fn new(status: &'static str, inputs: Vec<InputObject<'a>>) -> Envelope<'a> {
+        Envelope {
+            tool: "paginaverto",
+            tool_version: VERSION,
+            convention: CONVENTION,
+            status,
+            inputs,
+        }
+    }
+
+    fn print(&self) -> Result<(), serde_json::Error> {
+        println!("{}", serde_json::to_string(self)?);
+        Ok(())
+    }
+}
+
 #[derive(Serialize)]
 struct InputObject<'a> {
     path: &'a str,
@@ -414,23 +550,10 @@ struct InputObject<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<Summary>,
+    output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<serde_json::Value>,
     items: Vec<Item>,
-}
-
-/// Tool-owned counts. `errors`, `warnings` and `infos` are the severities
-/// `inspect` has.
-#[derive(Serialize)]
-struct Summary {
-    pages: usize,
-    text_layer: usize,
-    embedded_ocr: usize,
-    scan: usize,
-    empty: usize,
-    reads_as_scan: bool,
-    errors: usize,
-    warnings: usize,
-    infos: usize,
 }
 
 #[derive(Serialize)]
@@ -452,6 +575,7 @@ fn input_object(path: &str, result: Result<Inspection, paginaverto::Error>) -> I
                 path,
                 status: "error",
                 error: Some(e.to_string()),
+                output: None,
                 summary: None,
                 items: Vec::new(),
             };
@@ -471,17 +595,18 @@ fn input_object(path: &str, result: Result<Inspection, paginaverto::Error>) -> I
         path,
         status: if errors > 0 { "problems" } else { "ok" },
         error: None,
-        summary: Some(Summary {
-            pages: found.pages.len(),
-            text_layer: count(PageSource::TextLayer),
-            embedded_ocr: count(PageSource::EmbeddedOcr),
-            scan: count(PageSource::Scan),
-            empty: count(PageSource::Empty),
-            reads_as_scan: found.reads_as_scan,
-            errors,
-            warnings,
-            infos,
-        }),
+        output: None,
+        summary: Some(serde_json::json!({
+            "pages": found.pages.len(),
+            "text_layer": count(PageSource::TextLayer),
+            "embedded_ocr": count(PageSource::EmbeddedOcr),
+            "scan": count(PageSource::Scan),
+            "empty": count(PageSource::Empty),
+            "reads_as_scan": found.reads_as_scan,
+            "errors": errors,
+            "warnings": warnings,
+            "infos": infos,
+        })),
         items,
     }
 }
@@ -578,12 +703,16 @@ mod tests {
 
     #[test]
     fn help_short_circuits_a_malformed_line() {
-        assert_eq!(run(&["--nope", "-h"]), Cli::Help { inspect: false });
+        assert_eq!(run(&["--nope", "-h"]), Cli::Help(Topic::Tool));
         assert_eq!(
             run(&["inspect", "stray", "--help"]),
-            Cli::Help { inspect: true }
+            Cli::Help(Topic::Inspect)
         );
-        assert_eq!(run(&["-Vh"]), Cli::Help { inspect: false });
+        assert_eq!(
+            run(&["convert", "stray", "--help"]),
+            Cli::Help(Topic::Convert)
+        );
+        assert_eq!(run(&["-Vh"]), Cli::Help(Topic::Tool));
     }
 
     #[test]
@@ -602,7 +731,19 @@ mod tests {
 
     #[test]
     fn usage_errors() {
-        usage(&[], "missing subcommand");
+        usage(&[], "missing required -i");
+        usage(&["-i", "a", "-i", "b"], "1 input, 2 given");
+        usage(
+            &["convert", "-i", "a", "-o", "x", "--output", "y"],
+            "more than once",
+        );
+        usage(&["-i", "a", "--threads", "0"], "--threads");
+        usage(&["-i", "a", "--threads", "many"], "--threads");
+        usage(&["-i", "a", "--language", "not a tag"], "--language");
+        usage(&["-i", "a", "--language", ""], "--language");
+        usage(&["inspect", "-i", "a", "-o", "x"], "'-o'");
+        usage(&["inspect", "-i", "a", "-f"], "'-f'");
+        usage(&["inspect", "-i", "a", "--threads", "2"], "'--threads'");
         usage(&["inspect"], "missing required -i");
         usage(&["inspect", "a.pdf"], "use -i a.pdf");
         usage(&["-i", "a.pdf", "inspect"], "must come first");
@@ -617,6 +758,35 @@ mod tests {
             ],
             "more than once",
         );
+    }
+
+    #[test]
+    fn convert_is_the_default() {
+        let want = Cli::Convert(Job {
+            input: "a.pdf".into(),
+            output: Some("b.zip".into()),
+            force: true,
+            language: Some("pt-BR".into()),
+            models: Some("m".into()),
+            threads: Some(3),
+            json: true,
+        });
+        let line = [
+            "-i",
+            "a.pdf",
+            "-fob.zip",
+            "--language=pt-BR",
+            "--ocr-models",
+            "m",
+            "--threads",
+            "3",
+            "--format",
+            "json",
+        ];
+        assert_eq!(run(&line), want);
+        let mut named = vec!["convert"];
+        named.extend(line);
+        assert_eq!(run(&named), want);
     }
 
     #[test]

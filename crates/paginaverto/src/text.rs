@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Encoding, Object, ObjectId, Stream};
 
+use crate::document::{BlockBox, Figure, PageProblem, Run as TextRun};
 use crate::parallel::Pool;
-use crate::{Error, Figure};
+use crate::{Error, TextSource};
 
 // ---------------------------------------------------------------------------
 // The document's kind
@@ -105,11 +106,123 @@ pub(crate) fn has_full_page_image(doc: &Document, page_id: ObjectId) -> bool {
 // ---------------------------------------------------------------------------
 // One page's text
 
-/// A page's text, ready for the structure step.
+/// A piece of text with an italic mark per character, kept through every step
+/// that changes the text. The text itself never depends on the marks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Marked {
+    pub text: String,
+    /// One per character of `text`.
+    pub italic: Vec<bool>,
+}
+
+impl Marked {
+    pub fn plain(text: String) -> Marked {
+        let italic = vec![false; text.chars().count()];
+        Marked { text, italic }
+    }
+
+    fn push(&mut self, text: &str, italic: bool) {
+        self.text.push_str(text);
+        self.italic.extend(text.chars().map(|_| italic));
+    }
+
+    /// What [`squash`] does to the text. A kept space is italic only between
+    /// two italic characters.
+    pub fn squashed(&self) -> Marked {
+        let mut out = Marked::default();
+        let mut space = false;
+        let mut last = false;
+        for (c, &italic) in self.text.chars().zip(&self.italic) {
+            if is_noncharacter(c) {
+                continue;
+            }
+            if c.is_whitespace() {
+                space = !out.text.is_empty();
+                continue;
+            }
+            if space {
+                out.text.push(' ');
+                out.italic.push(last && italic);
+                space = false;
+            }
+            out.text.push(c);
+            out.italic.push(italic);
+            last = italic;
+        }
+        out
+    }
+
+    /// Joins `other` after this one with a space between them.
+    pub fn join(&mut self, other: &Marked) {
+        if !self.text.is_empty() {
+            let both = self.italic.last() == Some(&true) && other.italic.first() == Some(&true);
+            self.text.push(' ');
+            self.italic.push(both);
+        }
+        self.text.push_str(&other.text);
+        self.italic.extend_from_slice(&other.italic);
+    }
+
+    /// The text without these byte ranges.
+    pub fn without(&self, cut: &[std::ops::Range<usize>]) -> Marked {
+        let mut out = Marked::default();
+        let mut cut = cut.iter().peekable();
+        for ((at, c), &italic) in self.text.char_indices().zip(&self.italic) {
+            while cut.peek().is_some_and(|r| r.end <= at) {
+                cut.next();
+            }
+            if !cut.peek().is_some_and(|r| r.contains(&at)) {
+                out.text.push(c);
+                out.italic.push(italic);
+            }
+        }
+        out
+    }
+
+    /// The text as runs of one style each.
+    pub fn runs(&self) -> Vec<TextRun> {
+        let mut runs: Vec<TextRun> = Vec::new();
+        for (c, &italic) in self.text.chars().zip(&self.italic) {
+            match runs.last_mut() {
+                Some(run) if run.italic == italic => run.text.push(c),
+                _ => runs.push(TextRun {
+                    text: c.to_string(),
+                    italic,
+                }),
+            }
+        }
+        runs
+    }
+}
+
+/// A block of a page's text, about one paragraph.
 #[derive(Debug, Clone, Default)]
+pub(crate) struct TextBlock {
+    pub text: Marked,
+    /// Where it sits, when the reading knows.
+    pub place: Option<BlockBox>,
+}
+
+impl TextBlock {
+    pub fn plain(text: String) -> TextBlock {
+        TextBlock {
+            text: Marked::plain(text),
+            place: None,
+        }
+    }
+
+    pub fn str(&self) -> &str {
+        &self.text.text
+    }
+}
+
+/// A page's text, ready for the structure step.
+#[derive(Debug, Clone)]
 pub(crate) struct Page {
+    /// The page number, from 1.
+    pub number: u32,
     /// Text blocks, about one per paragraph, whitespace-normalised.
-    pub blocks: Vec<String>,
+    pub blocks: Vec<TextBlock>,
     /// No full-page image on this page: its typography is clean, so the
     /// font-size heading signal can be trusted.
     pub born_digital: bool,
@@ -117,12 +230,34 @@ pub(crate) struct Page {
     pub big_font: Vec<String>,
     /// The page's figures, in document order.
     pub figures: Vec<Figure>,
+    /// Its visible size in points.
+    pub size: (f32, f32),
+    /// Where its text came from.
+    pub source: TextSource,
+    /// What went wrong on it.
+    pub problems: Vec<PageProblem>,
+}
+
+impl Default for Page {
+    fn default() -> Page {
+        Page {
+            number: 1,
+            blocks: Vec::new(),
+            born_digital: false,
+            big_font: Vec::new(),
+            figures: Vec::new(),
+            size: (0.0, 0.0),
+            source: TextSource::None,
+            problems: Vec::new(),
+        }
+    }
 }
 
 /// Read one text-layer page. `with_figures` is decided once per document
 /// (see [`is_born_digital`]).
 pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figures: bool) -> Page {
     let born_digital = !has_full_page_image(doc, page_id);
+    let frame = Frame::of(doc, page_id);
     let mut big_font = Vec::new();
     let blocks = if born_digital {
         // Ours knows the page's geometry, so its lines and paragraphs are
@@ -130,7 +265,7 @@ pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figure
         // Ours runs anyway, for the font-size signal.
         let runs = runs(doc, page_id);
         big_font = big_font_texts(&runs);
-        let ours = blocks_from_runs(&runs);
+        let ours = blocks_from_runs(&runs, page_num, &frame);
         let theirs = lopdf_blocks(doc, page_id, page_num);
         if reads_worse(&ours, &theirs) {
             theirs
@@ -143,7 +278,7 @@ pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figure
         // by word comes out of lopdf one word to a line.
         let theirs = lopdf_blocks(doc, page_id, page_num);
         if theirs.is_empty() || word_by_word(&theirs) {
-            let ours = blocks_from_runs(&runs(doc, page_id));
+            let ours = blocks_from_runs(&runs(doc, page_id), page_num, &frame);
             if theirs.is_empty() || !reads_worse(&ours, &theirs) {
                 ours
             } else {
@@ -158,19 +293,136 @@ pub(crate) fn page(doc: &Document, page_id: ObjectId, page_num: u32, with_figure
     } else {
         Vec::new()
     };
+    let (source, problems) = if !blocks.is_empty() {
+        let source = if born_digital {
+            TextSource::TextLayer
+        } else {
+            TextSource::EmbeddedOcr
+        };
+        (source, Vec::new())
+    } else if born_digital {
+        (TextSource::None, Vec::new())
+    } else {
+        let format = largest_image(doc, page_id).and_then(undecodable_format);
+        let problem = match format {
+            Some(_) => PageProblem::UndecodableImage(format),
+            None => PageProblem::ImageNotRead,
+        };
+        (TextSource::None, vec![problem])
+    };
     Page {
+        number: page_num,
         blocks,
         born_digital,
         big_font,
         figures,
+        size: frame.size(),
+        source,
+        problems,
+    }
+}
+
+/// The visible part of a page, and how it is turned.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Frame {
+    /// `/CropBox`, else `/MediaBox`: left, bottom, right, top.
+    edges: Option<[f32; 4]>,
+    /// `/Rotate`, 0, 90, 180 or 270.
+    turn: i64,
+}
+
+impl Frame {
+    pub fn of(doc: &Document, id: ObjectId) -> Frame {
+        let rect = |key: &[u8]| {
+            let a = inherited(doc, id, key)?.as_array().ok()?;
+            let mut out = [0.0_f32; 4];
+            if a.len() != 4 {
+                return None;
+            }
+            for (slot, v) in out.iter_mut().zip(a) {
+                *slot = deref(doc, v)?.as_float().ok()?;
+            }
+            Some([
+                out[0].min(out[2]),
+                out[1].min(out[3]),
+                out[0].max(out[2]),
+                out[1].max(out[3]),
+            ])
+        };
+        Frame {
+            edges: rect(b"CropBox").or_else(|| rect(b"MediaBox")),
+            turn: inherited(doc, id, b"Rotate")
+                .and_then(|o| o.as_i64().ok())
+                .unwrap_or(0)
+                .rem_euclid(360),
+        }
+    }
+
+    /// The visible width and height, after the rotation.
+    pub fn size(&self) -> (f32, f32) {
+        let Some([x0, y0, x1, y1]) = self.edges else {
+            return (0.0, 0.0);
+        };
+        let (w, h) = (x1 - x0, y1 - y0);
+        if self.turn % 180 == 90 {
+            (h, w)
+        } else {
+            (w, h)
+        }
+    }
+
+    /// A rectangle in the page's own space, as the reader sees it: from the
+    /// top left of the visible page, after the rotation.
+    fn place(&self, page: u32, x0: f32, y0: f32, x1: f32, y1: f32) -> Option<BlockBox> {
+        let [left, bottom, right, top] = self.edges?;
+        let turned = |x: f32, y: f32| match self.turn {
+            90 => (y - bottom, x - left),
+            180 => (right - x, y - bottom),
+            270 => (top - y, right - x),
+            _ => (x - left, top - y),
+        };
+        let (ax, ay) = turned(x0, y0);
+        let (bx, by) = turned(x1, y1);
+        Some(BlockBox {
+            page,
+            x: ax.min(bx),
+            y: ay.min(by),
+            width: (ax - bx).abs(),
+            height: (ay - by).abs(),
+        })
+    }
+
+    /// A rectangle in pixels of a page-filling image, on an unturned page. A
+    /// turned page shows the image turned, and its reading is not to be trusted
+    /// for position.
+    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    pub fn place_pixels(
+        &self,
+        page: u32,
+        image: (i64, i64),
+        (x, y, w, h): (f32, f32, f32, f32),
+    ) -> Option<BlockBox> {
+        let [left, bottom, right, top] = self.edges?;
+        if self.turn != 0 || image.0 <= 0 || image.1 <= 0 {
+            return None;
+        }
+        let sx = (right - left) / image.0 as f32;
+        let sy = (top - bottom) / image.1 as f32;
+        Some(BlockBox {
+            page,
+            x: x * sx,
+            y: y * sy,
+            width: w * sx,
+            height: h * sy,
+        })
     }
 }
 
 /// Are most of these blocks a single word? Text no reader would call lines.
-fn word_by_word(blocks: &[String]) -> bool {
+fn word_by_word(blocks: &[TextBlock]) -> bool {
     let single = blocks
         .iter()
-        .filter(|b| b.split_whitespace().nth(1).is_none())
+        .filter(|b| b.str().split_whitespace().nth(1).is_none())
         .count();
     blocks.len() >= 10 && single * 2 > blocks.len()
 }
@@ -179,7 +431,7 @@ fn word_by_word(blocks: &[String]) -> bool {
 /// good part of the letters, or holds clearly more missed spaces. A lower
 /// glue score alone is no reason, because it does not see split words and
 /// paragraphs.
-fn reads_worse(ours: &[String], theirs: &[String]) -> bool {
+fn reads_worse(ours: &[TextBlock], theirs: &[TextBlock]) -> bool {
     let (ours_glue, ours_letters) = glue_score(ours);
     let (theirs_glue, theirs_letters) = glue_score(theirs);
     // `glue_score` gives letters as a negative, for its ordering.
@@ -194,9 +446,9 @@ const GLUE_MARGIN: u32 = 20;
 /// How badly text reads: the share (per mille) of letters in implausibly
 /// long words (18+ letters: a missed space), then more letters is better.
 /// Lower wins; no text at all loses to anything.
-fn glue_score(blocks: &[String]) -> (u32, i64) {
+fn glue_score(blocks: &[TextBlock]) -> (u32, i64) {
     let (mut letters, mut glued) = (0usize, 0usize);
-    for word in blocks.iter().flat_map(|b| b.split_whitespace()) {
+    for word in blocks.iter().flat_map(|b| b.str().split_whitespace()) {
         let n = word.chars().filter(|c| c.is_alphabetic()).count();
         letters += n;
         if n >= 18 {
@@ -212,7 +464,7 @@ fn glue_score(blocks: &[String]) -> (u32, i64) {
 /// lopdf's own `extract_text`, one block per non-empty line. Not asked at
 /// all on a page with a composite font lopdf cannot map to Unicode: it would
 /// return the raw glyph codes as letters.
-fn lopdf_blocks(doc: &Document, page_id: ObjectId, page_num: u32) -> Vec<String> {
+fn lopdf_blocks(doc: &Document, page_id: ObjectId, page_num: u32) -> Vec<TextBlock> {
     let unreadable = fonts(doc, page_id).iter().any(|(_, d)| {
         d.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Type0".as_slice())
             && !matches!(
@@ -228,6 +480,7 @@ fn lopdf_blocks(doc: &Document, page_id: ObjectId, page_num: u32) -> Vec<String>
         .lines()
         .map(squash)
         .filter(|l| !l.is_empty())
+        .map(TextBlock::plain)
         .collect()
 }
 
@@ -274,6 +527,8 @@ struct Run {
     /// Device-space end x, from the glyphs' real widths.
     end_x: f32,
     y: f32,
+    /// Shown in an italic font.
+    italic: bool,
 }
 
 /// A 2D affine matrix `[a b c d e f]`, PDF's row-vector convention.
@@ -337,7 +592,8 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
                 bytes: &[u8]| {
         let shown = decode(font, bytes);
         let width = ts.width(&shown);
-        push(out, *tm, ctm, ts.size, shown.text, width);
+        let italic = font.is_some_and(|f| f.italic);
+        push(out, *tm, ctm, ts.size, shown.text, width, italic);
         *tm = mul(translate(width, 0.0), *tm);
     };
 
@@ -426,7 +682,8 @@ fn runs(doc: &Document, page_id: ObjectId) -> Vec<Run> {
                             _ => {}
                         }
                     }
-                    push(&mut out, tm, ctm, ts.size, text, width);
+                    let italic = font.is_some_and(|f| f.italic);
+                    push(&mut out, tm, ctm, ts.size, text, width, italic);
                     tm = mul(translate(width, 0.0), tm);
                 }
             }
@@ -474,7 +731,7 @@ const WORD_GAP_EM: f32 = 0.2;
 
 /// Record a run at the current text position. `width` is its advance in text
 /// space.
-fn push(out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, text: String, width: f32) {
+fn push(out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, text: String, width: f32, italic: bool) {
     if text.trim().is_empty() {
         return;
     }
@@ -487,13 +744,14 @@ fn push(out: &mut Vec<Run>, tm: Mat, ctm: Mat, size: f32, text: String, width: f
         x: m[4],
         end_x: m[4] + width * xscale,
         y: m[5],
+        italic,
     });
 }
 
 /// Paragraph blocks from positioned runs: lines clustered by y, runs joined
 /// by their x gaps, lines merged into blocks at a large vertical gap or a
 /// first-line indent.
-fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
+fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
     let mut runs: Vec<&Run> = runs.iter().filter(|r| !r.text.trim().is_empty()).collect();
     if runs.is_empty() {
         return Vec::new();
@@ -506,7 +764,10 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
         x: f32,
         end: f32,
         font: f32,
-        text: String,
+        /// The top of the line's highest glyphs and the bottom of its lowest.
+        top: f32,
+        bottom: f32,
+        text: Marked,
     }
     let mut lines: Vec<Line> = Vec::new();
     let mut i = 0;
@@ -522,7 +783,7 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
         // Many PDFs place each glyph or word as its own run; a space goes
         // where the gap from the previous run's real end exceeds 0.2 em, or
         // where either run shows a space at that edge.
-        let mut text = String::new();
+        let mut text = Marked::default();
         let mut prev: Option<&Run> = None;
         for r in &group {
             let t = r.text.trim();
@@ -534,13 +795,13 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
                     || p.text.ends_with(char::is_whitespace)
                     || r.text.starts_with(char::is_whitespace)
             }) {
-                text.push(' ');
+                text.push(" ", false);
             }
-            text.push_str(t);
+            text.push(t, r.italic);
             prev = Some(r);
         }
-        let text = squash(&text);
-        if text.is_empty() {
+        let text = text.squashed();
+        if text.text.is_empty() {
             continue;
         }
         lines.push(Line {
@@ -548,6 +809,14 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
             x: group.iter().map(|r| r.x).fold(f32::INFINITY, f32::min),
             end: group.iter().map(|r| r.end_x).fold(f32::MIN, f32::max),
             font: group.iter().map(|r| r.font_size).fold(0.0, f32::max),
+            top: group
+                .iter()
+                .map(|r| r.y + r.font_size * GLYPH_ABOVE)
+                .fold(f32::MIN, f32::max),
+            bottom: group
+                .iter()
+                .map(|r| r.y - r.font_size * GLYPH_BELOW)
+                .fold(f32::INFINITY, f32::min),
             text,
         });
     }
@@ -563,7 +832,9 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
     let right = lines.iter().map(|l| l.end).fold(f32::MIN, f32::max);
 
     let mut blocks = Vec::new();
-    let mut cur = String::new();
+    let mut cur = Marked::default();
+    // Left, bottom, right, top of what `cur` holds.
+    let mut span = [f32::INFINITY, f32::INFINITY, f32::MIN, f32::MIN];
     let mut prev: Option<&Line> = None;
     for l in &lines {
         let indented = l.x > left + l.font;
@@ -572,30 +843,45 @@ fn blocks_from_runs(runs: &[Run]) -> Vec<String> {
         let continues_indent =
             prev.is_some_and(|p| (p.x - l.x).abs() < l.font * 0.5 && p.end > right - l.font * 3.0);
         // A lower-case start continues a sentence, however far it is indented.
-        let starts_lower = l.text.chars().next().is_some_and(char::is_lowercase);
-        let new_block = cur.is_empty()
+        let starts_lower = l.text.text.chars().next().is_some_and(char::is_lowercase);
+        let new_block = cur.text.is_empty()
             || prev.is_some_and(|p| median_gap > 0.0 && p.y - l.y > median_gap * 1.6)
             || prev.is_some_and(|p| (p.font - l.font).abs() > l.font.max(p.font) * 0.15)
-            || prev.is_some_and(|p| mostly_caps(&p.text) != mostly_caps(&l.text))
+            || prev.is_some_and(|p| mostly_caps(&p.text.text) != mostly_caps(&l.text.text))
             || (indented && !continues_indent && !starts_lower);
         if new_block {
-            if !cur.trim().is_empty() {
-                blocks.push(cur.trim().to_string());
+            if !cur.text.is_empty() {
+                let [x0, y0, x1, y1] = span;
+                blocks.push(TextBlock {
+                    text: std::mem::take(&mut cur),
+                    place: frame.place(page, x0, y0, x1, y1),
+                });
             }
-            cur = l.text.clone();
-        } else {
-            if !cur.is_empty() {
-                cur.push(' ');
-            }
-            cur.push_str(&l.text);
+            span = [f32::INFINITY, f32::INFINITY, f32::MIN, f32::MIN];
         }
+        cur.join(&l.text);
+        span = [
+            span[0].min(l.x),
+            span[1].min(l.bottom),
+            span[2].max(l.end),
+            span[3].max(l.top),
+        ];
         prev = Some(l);
     }
-    if !cur.trim().is_empty() {
-        blocks.push(cur.trim().to_string());
+    if !cur.text.is_empty() {
+        let [x0, y0, x1, y1] = span;
+        blocks.push(TextBlock {
+            text: cur,
+            place: frame.place(page, x0, y0, x1, y1),
+        });
     }
     blocks
 }
+
+/// How far above and below the baseline a line's box reaches, in font sizes.
+/// Fonts differ a little; this is about where most put their glyphs.
+const GLYPH_ABOVE: f32 = 0.8;
+const GLYPH_BELOW: f32 = 0.2;
 
 /// At least 3 letters, and 85% of them capitals: how a heading can look.
 pub(crate) fn mostly_caps(s: &str) -> bool {
@@ -655,6 +941,7 @@ struct Font<'a> {
     decoder: Decoder<'a>,
     widths: HashMap<u32, f32>,
     default_width: f32,
+    italic: bool,
 }
 
 /// The page's fonts by resource name. A font that is neither decodable by
@@ -685,10 +972,56 @@ fn page_fonts<'a>(doc: &'a Document, page_id: ObjectId) -> HashMap<Vec<u8>, Font
                 decoder,
                 widths,
                 default_width,
+                italic: is_italic(doc, dict),
             },
         );
     }
     out
+}
+
+/// Is this an italic font? By its name, or by what its descriptor says: a
+/// slant, or the italic flag. A composite font's descriptor is its descendant's.
+fn is_italic(doc: &Document, font: &Dictionary) -> bool {
+    let name = font
+        .get(b"BaseFont")
+        .and_then(Object::as_name)
+        .map(|n| String::from_utf8_lossy(n).to_lowercase())
+        .unwrap_or_default();
+    if ["italic", "oblique", "kursiv"]
+        .iter()
+        .any(|w| name.contains(w))
+    {
+        return true;
+    }
+    let holder = font
+        .get(b"DescendantFonts")
+        .ok()
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_array().ok())
+        .and_then(|a| a.first())
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_dict().ok())
+        .unwrap_or(font);
+    let Some(descriptor) = holder
+        .get(b"FontDescriptor")
+        .ok()
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_dict().ok())
+    else {
+        return false;
+    };
+    const ITALIC_FLAG: i64 = 1 << 6;
+    let flagged = descriptor
+        .get(b"Flags")
+        .ok()
+        .and_then(|o| o.as_i64().ok())
+        .is_some_and(|f| f & ITALIC_FLAG != 0);
+    let slanted = descriptor
+        .get(b"ItalicAngle")
+        .ok()
+        .and_then(|o| o.as_float().ok())
+        .is_some_and(|a| a != 0.0);
+    flagged || slanted
 }
 
 /// Shown bytes to text and advance.
@@ -1089,11 +1422,24 @@ fn figures(doc: &Document, page_id: ObjectId) -> Vec<Figure> {
         .unwrap_or_default()
 }
 
-/// The page's largest image, as bytes OCR can decode: for a scan, where the
-/// page is one big image. The first of equal largest wins.
+/// An image as bytes OCR can decode.
 #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
-pub(crate) fn scan_image(doc: &Document, page_id: ObjectId) -> Option<Figure> {
-    figure(doc, largest_image(doc, page_id)?)
+pub(crate) fn scan_image(doc: &Document, image: &Stream) -> Option<Figure> {
+    figure(doc, image)
+}
+
+/// An image's width and height in pixels.
+#[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+pub(crate) fn pixels(image: &Stream) -> (i64, i64) {
+    let dim = |k: &[u8]| {
+        image
+            .dict
+            .get(k)
+            .ok()
+            .and_then(|o| o.as_i64().ok())
+            .unwrap_or(0)
+    };
+    (dim(b"Width"), dim(b"Height"))
 }
 
 /// The page's largest image; the first of equal largest wins.
@@ -1302,6 +1648,22 @@ endcmap";
     }
 
     #[test]
+    fn a_box_follows_the_page_turn() {
+        let at = |turn| {
+            let frame = Frame {
+                edges: Some([0.0, 0.0, 100.0, 200.0]),
+                turn,
+            };
+            let b = frame.place(1, 10.0, 20.0, 30.0, 25.0).unwrap();
+            (b.x, b.y, b.width, b.height)
+        };
+        assert_eq!(at(0), (10.0, 175.0, 20.0, 5.0));
+        assert_eq!(at(90), (20.0, 10.0, 5.0, 20.0));
+        assert_eq!(at(180), (70.0, 20.0, 20.0, 5.0));
+        assert_eq!(at(270), (175.0, 70.0, 5.0, 20.0));
+    }
+
+    #[test]
     fn hex_helpers() {
         assert_eq!(hex_units("0041").unwrap(), vec![0x41]);
         assert_eq!(hex_string("00660069").as_deref(), Some("fi"));
@@ -1316,10 +1678,11 @@ endcmap";
 
     #[test]
     fn glued_text_scores_worse() {
-        let spaced = vec!["At year end 2022, Berkshire was the largest owner".to_string()];
-        let glued = vec!["Atyearend2022,Berkshirewasthelargestowner".to_string()];
+        let block = |s: &str| vec![TextBlock::plain(s.to_string())];
+        let spaced = block("At year end 2022, Berkshire was the largest owner");
+        let glued = block("Atyearend2022,Berkshirewasthelargestowner");
         assert!(glue_score(&spaced) < glue_score(&glued));
-        let more = vec!["At year end 2022, Berkshire was the largest owner of".to_string()];
+        let more = block("At year end 2022, Berkshire was the largest owner of");
         assert!(glue_score(&more) < glue_score(&spaced));
         assert!(glue_score(&glued) < glue_score(&[]));
     }
@@ -1330,6 +1693,44 @@ endcmap";
         assert_eq!(letters_only("ÇAĞ"), "çağ");
         assert_eq!(letters_only("KAPI"), letters_only("Kapı"));
         assert_eq!(letters_only("BİRİNCİ"), letters_only("Birinci"));
+    }
+
+    #[test]
+    fn marked_text_squashes_as_plain_text_does() {
+        for s in [
+            "  a  b\t\nc ",
+            "",
+            "   ",
+            "a\u{FFFE} \u{FFFF}b",
+            "Öğ  renci",
+        ] {
+            let m = Marked::plain(s.to_string()).squashed();
+            assert_eq!(m.text, squash(s));
+            assert_eq!(m.italic.len(), m.text.chars().count());
+        }
+    }
+
+    #[test]
+    fn a_space_is_italic_only_between_italics() {
+        let mut m = Marked::default();
+        m.push("a", true);
+        m.push("  ", false);
+        m.push("b", true);
+        m.push(" ", false);
+        m.push("c", false);
+        let runs = m.squashed().runs();
+        let got: Vec<_> = runs.iter().map(|r| (r.text.as_str(), r.italic)).collect();
+        assert_eq!(got, [("a b", true), (" c", false)]);
+    }
+
+    #[test]
+    fn cuts_keep_the_marks_in_step() {
+        let mut m = Marked::default();
+        m.push("Öğ-", true);
+        m.push(" ren", false);
+        let cut = m.without(std::slice::from_ref(&(4..6)));
+        assert_eq!(cut.text, "Öğren");
+        assert_eq!(cut.italic, [true, true, false, false, false]);
     }
 
     #[test]

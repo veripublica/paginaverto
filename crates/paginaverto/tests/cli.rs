@@ -234,3 +234,137 @@ fn an_unreadable_input_does_not_stop_the_others() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 page,"));
     std::fs::remove_file(good).unwrap();
 }
+
+fn convert_paths(name: &str, pages: &[Kind]) -> (PathBuf, PathBuf) {
+    let input = write_pdf(name, pages);
+    let output = input.with_extension("zip");
+    let _ = std::fs::remove_file(&output);
+    (input, output)
+}
+
+fn document_of(zip_path: &Path) -> serde_json::Value {
+    let file = std::fs::File::open(zip_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let entry = zip.by_name("document.json").unwrap();
+    serde_json::from_reader(entry).unwrap()
+}
+
+#[test]
+fn convert_writes_the_document_beside_the_input() {
+    let (input, output) = convert_paths("convert", &[Kind::Text, Kind::Text]);
+    let out = tool(&["-i", input.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let doc = document_of(&output);
+    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["producer"]["tool"], "paginaverto");
+    assert_eq!(doc["language"], serde_json::Value::Null);
+    assert_eq!(doc["pages"].as_array().unwrap().len(), 2);
+    let page = &doc["pages"][0];
+    assert_eq!(page["number"], 1);
+    assert_eq!(page["width"], 600.0, "the page is turned");
+    assert_eq!(page["text_source"], "text_layer");
+    let block = &doc["blocks"][0];
+    assert_eq!(block["id"], "b1");
+    assert_eq!(block["kind"], "paragraph");
+    assert_eq!(block["confidence"], serde_json::Value::Null);
+    assert!(
+        block["runs"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Some words")
+    );
+    assert!(block["boxes"][0]["page"].is_number());
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+fn convert_records_the_language_and_reports_in_json() {
+    let (input, output) = convert_paths("convert-json", &[Kind::Text]);
+    let out = tool(&[
+        "convert",
+        "-i",
+        input.to_str().unwrap(),
+        "--language",
+        "tr",
+        "--threads",
+        "2",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let report = json(&out);
+    assert_eq!(report["status"], "ok");
+    let object = &report["inputs"][0];
+    assert_eq!(object["output"], output.to_str().unwrap());
+    assert_eq!(object["summary"]["text_layer"], 1);
+    assert_eq!(document_of(&output)["language"], "tr");
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+fn convert_will_not_replace_a_file_without_force() {
+    let (input, output) = convert_paths("convert-force", &[Kind::Text]);
+    std::fs::write(&output, b"mine").unwrap();
+    let out = tool(&["-i", input.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(2));
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(message.contains("use -f to replace it"), "{message}");
+    assert_eq!(std::fs::read(&output).unwrap(), b"mine");
+
+    let out = tool(&["-f", "-i", input.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(document_of(&output)["schema_version"], 1);
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+fn convert_never_writes_over_its_input() {
+    let (input, _) = convert_paths("convert-self", &[Kind::Text]);
+    let before = std::fs::read(&input).unwrap();
+    let path = input.to_str().unwrap();
+    let out = tool(&["-f", "-i", path, "-o", path]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("is the input"));
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn convert_refuses_a_scan_without_models_and_writes_nothing() {
+    let (input, output) = convert_paths("convert-scan", &[Kind::Jbig2]);
+    let out = tool(&["-i", input.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!output.exists());
+}
+
+#[test]
+fn convert_names_a_folder_without_models() {
+    let (input, output) = convert_paths("convert-models", &[Kind::Text]);
+    let empty = std::env::temp_dir();
+    let out = tool(&[
+        "-i",
+        input.to_str().unwrap(),
+        "--ocr-models",
+        empty.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("text-detection"));
+    assert!(!output.exists());
+}
+
+#[test]
+fn a_page_image_in_a_pdf_with_text_is_a_warning_with_the_document_written() {
+    let (input, output) = convert_paths(
+        "convert-image",
+        &[Kind::Text, Kind::Text, Kind::Text, Kind::Jbig2],
+    );
+    let out = tool(&["-i", input.to_str().unwrap(), "--format", "json"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let report = json(&out);
+    let item = &report["inputs"][0]["items"][0];
+    assert_eq!(item["code"], "PV-IMAGE-UNDECODABLE");
+    assert_eq!(item["severity"], "warning");
+    let doc = document_of(&output);
+    assert_eq!(doc["pages"][3]["problems"][0], "undecodable_images");
+    assert_eq!(doc["pages"][3]["text_source"], "none");
+    let _ = std::fs::remove_file(&output);
+}
