@@ -280,6 +280,86 @@ pub(crate) fn figure_pixels(
     }
 }
 
+/// The image's pixels in colour, within `max_pixels`.
+fn colour(doc: &Document, stream: &Stream, max_pixels: u64) -> Option<image::RgbImage> {
+    match last_filter(stream) {
+        Some(b"JPXDecode") => Some(jpx_colour(doc, stream, max_pixels)?.into_rgb8()),
+        Some(b"DCTDecode") => {
+            let data = before_last_filter(doc, stream)?;
+            let reader = image::ImageReader::with_format(
+                std::io::Cursor::new(&data),
+                image::ImageFormat::Jpeg,
+            );
+            let (w, h) = reader.into_dimensions().ok()?;
+            fits(w, h, max_pixels)?;
+            Some(
+                image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg)
+                    .ok()?
+                    .into_rgb8(),
+            )
+        }
+        _ => {
+            let g = gray(doc, stream, max_pixels)?;
+            let g = image::GrayImage::from_raw(g.width, g.height, g.pixels)?;
+            Some(image::DynamicImage::ImageLuma8(g).into_rgb8())
+        }
+    }
+}
+
+/// A page made of layers, as library scans make them: one image without a mask
+/// (the background, often at a lower resolution), and over it one or more
+/// images each shown through its soft mask (the text and lines, in their
+/// colour). All are assumed to fill the page, as such scans draw them. The page
+/// put together at the first layer's size, or `None` if it is not built so.
+pub(crate) fn layered_page(
+    doc: &Document,
+    images: &[&Stream],
+    max_pixels: u64,
+) -> Option<image::RgbImage> {
+    use image::imageops::{self, FilterType};
+    let mask_of = |s: &Stream| {
+        deref(doc, s.dict.get(b"SMask").ok()?)?
+            .as_stream()
+            .ok()
+            .cloned()
+    };
+    let backgrounds: Vec<&&Stream> = images.iter().filter(|s| mask_of(s).is_none()).collect();
+    let layers: Vec<(&Stream, Stream)> = images
+        .iter()
+        .filter_map(|s| Some((*s, mask_of(s)?)))
+        .collect();
+    let ([background], Some((first, _))) = (backgrounds.as_slice(), layers.first()) else {
+        return None;
+    };
+    let (w, h) = (
+        u32::try_from(first.dict.get(b"Width").ok()?.as_i64().ok()?).ok()?,
+        u32::try_from(first.dict.get(b"Height").ok()?.as_i64().ok()?).ok()?,
+    );
+    fits(w, h, max_pixels)?;
+    let base = colour(doc, background, max_pixels)?;
+    let mut page = imageops::resize(&base, w, h, FilterType::Triangle);
+    for (layer, mask) in &layers {
+        let mut colours = colour(doc, layer, max_pixels)?;
+        if colours.dimensions() != (w, h) {
+            colours = imageops::resize(&colours, w, h, FilterType::Triangle);
+        }
+        // A soft mask's sample is how opaque the layer is there, `/Decode` applied.
+        let alpha = gray(doc, mask, max_pixels)?;
+        let alpha = image::GrayImage::from_raw(alpha.width, alpha.height, alpha.pixels)?;
+        let alpha = if alpha.dimensions() == (w, h) {
+            alpha
+        } else {
+            imageops::resize(&alpha, w, h, FilterType::Nearest)
+        };
+        for (x, y, a) in alpha.enumerate_pixels() {
+            if a[0] >= 128 {
+                page.put_pixel(x, y, *colours.get_pixel(x, y));
+            }
+        }
+    }
+    Some(page)
+}
+
 fn jpx_colour(doc: &Document, stream: &Stream, max_pixels: u64) -> Option<image::DynamicImage> {
     let data = before_last_filter(doc, stream)?;
     let image =

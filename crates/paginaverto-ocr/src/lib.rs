@@ -141,8 +141,17 @@ pub struct Engine {
 /// The characters of the PP-OCRv5 Latin model, in the order of its output.
 const LATIN_DICT: &str = include_str!("latin_dict.txt");
 
+/// Every character [`LATIN_RECOGNITION`] can give, besides the space.
+pub fn latin_alphabet() -> Vec<char> {
+    LATIN_DICT.lines().flat_map(str::chars).collect()
+}
+
 struct Paddle {
     model: Model,
+    /// Whether the text is Turkish (or Azerbaijani), where I and İ, ı and i are
+    /// four letters.
+    turkish: bool,
+    turkish_pairs: Vec<(usize, usize)>,
     /// Output label to character: 0 is CTC's blank, the last is a space.
     labels: Vec<String>,
 }
@@ -166,7 +175,17 @@ impl Paddle {
         let mut labels = vec![String::new()];
         labels.extend(LATIN_DICT.lines().map(str::to_owned));
         labels.push(" ".to_owned());
-        Paddle { model, labels }
+        let at = |c: &str| labels.iter().position(|l| l == c);
+        let turkish_pairs = [("I", "İ"), ("i", "ı")]
+            .iter()
+            .filter_map(|(a, b)| Some((at(a)?, at(b)?)))
+            .collect();
+        Paddle {
+            model,
+            labels,
+            turkish: false,
+            turkish_pairs,
+        }
     }
 
     /// One line's crop at the model's height, and its box. The crop is the box around the line's words,
@@ -221,9 +240,18 @@ impl Paddle {
         let mut text = String::new();
         let mut last = 0;
         for t in 0..steps {
-            let best = (0..classes)
+            let mut best = (0..classes)
                 .max_by(|&a, &b| output[[0, t, a]].total_cmp(&output[[0, t, b]]))
                 .unwrap_or(0);
+            if self.turkish {
+                for &(plain, turkish) in &self.turkish_pairs {
+                    if best == plain
+                        && output[[0, t, turkish]] * TURKISH_FAVOUR > output[[0, t, plain]]
+                    {
+                        best = turkish;
+                    }
+                }
+            }
             // CTC: a repeat is one character, the blank separates real repeats.
             if best != 0
                 && best != last
@@ -257,6 +285,14 @@ impl Paddle {
     }
 }
 
+/// In Turkish text, İ wins over I, and ı over i, unless the model thinks the
+/// plain letter at least this many times likelier. The model reads İ as I and
+/// ı as i too often: on one Turkish scan, 712 İ of the reference's 1,115 with
+/// 561 I against 117. Measured on that scan, against its publisher's EPUB:
+/// words found 94.18% with no favour, 94.91% at 3, 95.40% at 10, 95.41% at 30,
+/// where i began to fall below the reference's count (34,524 against 34,881).
+const TURKISH_FAVOUR: f32 = 10.0;
+
 /// The height PP-OCR's recognition model takes its lines at.
 const HEIGHT: u32 = 48;
 
@@ -286,6 +322,22 @@ impl Engine {
         })
         .map_err(|e| Error::Models(format!("ocrs engine init failed: {e}")))?;
         Ok(Engine { detector, paddle })
+    }
+
+    /// Tell the engine the content's language, a BCP-47 tag. With the Latin
+    /// model it changes one thing: in Turkish and Azerbaijani (`tr`, `az`), the
+    /// dotted capital İ and the dotless ı are favoured where the model hesitates
+    /// between them and I or i. ocrs's own model has neither letter, so it
+    /// ignores this.
+    pub fn set_language(&mut self, language: &str) {
+        let primary = language
+            .split(['-', '_'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if let Some(paddle) = &mut self.paddle {
+            paddle.turkish = matches!(primary.as_str(), "tr" | "az");
+        }
     }
 
     /// Recognise one page image (any format the `image` crate decodes here:

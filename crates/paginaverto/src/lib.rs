@@ -32,6 +32,7 @@ mod decode;
 mod document;
 mod images;
 mod inspect;
+mod languages;
 mod limits;
 mod outline;
 mod parallel;
@@ -43,6 +44,7 @@ pub use document::{
     SCHEMA_VERSION, TextSource,
 };
 pub use inspect::{FontInfo, Inspection, PageInfo, PageSource};
+pub use languages::recognises;
 pub use limits::{LimitKind, Limits};
 pub use outline::OutlineEntry;
 pub use parallel::{Cancel, PageDone, Progress};
@@ -346,12 +348,16 @@ fn engine(opts: &Options) -> Result<paginaverto_ocr::Engine, Error> {
     else {
         return Err(Error::ScanNeedsOcr);
     };
-    // Required, though the recognition does not use it.
+    // Required. The recognition uses it for Turkish's dotted and dotless i.
     if opts.language.as_deref().is_none_or(str::is_empty) {
         return Err(Error::LanguageRequired);
     }
-    paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
-        .map_err(|e| Error::Models(e.to_string()))
+    let mut engine = paginaverto_ocr::Engine::new(detection.clone(), recognition.clone())
+        .map_err(|e| Error::Models(e.to_string()))?;
+    if let Some(language) = &opts.language {
+        engine.set_language(language);
+    }
+    Ok(engine)
 }
 
 /// Recognise every page of a scan.

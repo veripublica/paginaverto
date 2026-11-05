@@ -250,6 +250,7 @@ fn main() {
             .expect("a font");
         let name = Path::new(font_path).file_stem().unwrap().to_string_lossy();
         for (lang, corpus) in [("en", EN), ("tr", TR)] {
+            opts.language = Some(lang.into());
             for quality in [Quality::Clean, Quality::Noisy] {
                 let pages = render(corpus, &font, quality);
                 let pdf = scan_pdf(&pages);

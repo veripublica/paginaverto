@@ -17,11 +17,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   PP-OCRv5 Latin model (`LATIN_RECOGNITION`, 8 MB, Apache-2.0), whose alphabet
   holds ç ğ ı İ ö ş ü â î û and the other Latin-script letters. ocrs still finds
   the lines. On the public accuracy set, the character error rate fell from
-  13.04–17.26% to 0.48–0.67% in Turkish, and from 1.20–5.46% to 0.19–0.37% in
+  13.04–17.26% to 0.29–0.58% in Turkish, and from 1.20–5.46% to 0.19–0.37% in
   English. On one Turkish scan, checked against the publisher's EPUB, the share
-  of its words found rose from 55.70% to 94.18%. The set is small and synthetic,
+  of its words found rose from 55.70% to 95.40%. The set is small and synthetic,
   and the scan is one book, so no language counts as supported yet. Only Turkish
   and English are measured.
+- **Turkish İ and ı.** With the content language `tr` (or `az`), OCR favours the
+  dotted capital İ over I and the dotless ı over i where the model hesitates
+  between them. On the Turkish scan, İ found rose from 712 to 983 of 1,059, and
+  words found from 94.18% to 95.40%. The language had been required for OCR but
+  unused; this is its first use.
 - **Every image format a PDF scan uses:** JBIG2, JPEG 2000 and CCITT fax, and
   raw images at 1, 2 or 4 bits, CMYK, indexed colour and image masks. All pure
   Rust. A scan stored this way used to be refused; the one measured now reads.
@@ -34,11 +39,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   figures, 23 to 64 and 9 to 31, and their text is unchanged. Indexed-colour and
   CMYK raw images are still skipped.
 - **Covers and plates of scans with a text layer:** a page whose layer holds no
-  text keeps its image as a figure, unless the image is blank or one layer of a
-  page built of several (it has a soft mask). On the 18 PDFs, 34 such pages,
-  each looked at: 3 kept (two covers and a plate), 8 blank, 23 layers. A page built of layers, as
-  in many library scans, still loses its picture; putting the layers together
-  comes later.
+  text keeps its image as a figure, unless it is blank. A page built of layers,
+  as library scans build them (a background, and over it a colour layer shown
+  through a text mask), is put together first. On the 18 PDFs, 34 such pages,
+  each looked at: 13 kept (covers, plates, end papers and a pale worksheet), 21
+  blank or holding only a library stamp or a shelf mark. A page counts as blank
+  when less than 3% of it differs from its paper.
+- **`paginaverto::recognises(language)`** says whether OCR with the Latin model
+  can read a language: its BCP-47 tag is written in Latin letters and the model
+  has every one of them. True for 51 languages and Serbian in Latin letters
+  (`sr-Latn`), Turkish and English the only
+  ones measured; false for other scripts, a script subtag other than `Latn`, and
+  Azerbaijani, Vietnamese and Uzbek, whose letters the model lacks.
+- **Constructors for tests and tools:** `Block::paragraph`, `Block::heading`,
+  `Block::figure`, `Run::new` and `Figure::new`, with `Document::default()`, so a
+  caller can build a document by hand.
 - **Page images as input:** a PNG, JPEG or TIFF file (every page of a
   multi-page TIFF), or a folder of them, read in natural name order.
   `read` and `paginaverto -i` take them as they take a PDF; the format is found
@@ -67,6 +82,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   that their format is unknown to paginaverto.
 - The web binding's `.wasm` grows with the image decoders, from 2.70 to 3.59 MB
   (1.08 to 1.34 MB gzipped).
+
+### Fixed
+
+- **Paragraphs indented by exactly one font size** now start where they should.
+  The indent had to be more than one font size, so one book read as 98
+  paragraphs of over 3,000 characters, 16 of them over 6,000; now 6 and none,
+  from 1,652 to 2,543 paragraphs. Five other PDFs gain 1 to 21 paragraphs, and
+  the book measured against Mistral is unchanged.
 
 ## [0.2.0] - 2026-11-05
 

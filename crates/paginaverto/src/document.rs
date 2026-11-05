@@ -172,6 +172,31 @@ pub struct Block {
 }
 
 impl Block {
+    /// A paragraph, for a caller's own tests and tools: what `read` gives is
+    /// read, never built this way.
+    pub fn paragraph(id: impl Into<String>, runs: Vec<Run>) -> Block {
+        Block::new(id, BlockKind::Paragraph { runs })
+    }
+
+    /// A heading of this level, from 1.
+    pub fn heading(id: impl Into<String>, level: u32, runs: Vec<Run>) -> Block {
+        Block::new(id, BlockKind::Heading { level, runs })
+    }
+
+    /// A figure.
+    pub fn figure(id: impl Into<String>, figure: Figure) -> Block {
+        Block::new(id, BlockKind::Figure(figure))
+    }
+
+    fn new(id: impl Into<String>, kind: BlockKind) -> Block {
+        Block {
+            id: id.into(),
+            kind,
+            boxes: Vec::new(),
+            confidence: None,
+        }
+    }
+
     /// The block's text; empty for a figure.
     pub fn text(&self) -> String {
         self.runs().iter().map(|r| r.text.as_str()).collect()
@@ -226,6 +251,16 @@ pub struct Run {
     pub italic: bool,
 }
 
+impl Run {
+    /// A run of text, italic or not.
+    pub fn new(text: impl Into<String>, italic: bool) -> Run {
+        Run {
+            text: text.into(),
+            italic,
+        }
+    }
+}
+
 /// Where a block sits on a page: in points, with the origin at the top left of
 /// the visible page, after its rotation. For text, a box follows the font's
 /// size rather than the drawn glyphs.
@@ -255,6 +290,18 @@ pub struct Figure {
     pub media_type: &'static str,
     /// `jpg` or `png`.
     pub ext: &'static str,
+}
+
+impl Figure {
+    /// A figure from an image file's bytes, for a caller's own tests and
+    /// tools: `media_type` such as `image/png`, `ext` such as `png`.
+    pub fn new(data: Vec<u8>, media_type: &'static str, ext: &'static str) -> Figure {
+        Figure {
+            data,
+            media_type,
+            ext,
+        }
+    }
 }
 
 impl fmt::Debug for Figure {

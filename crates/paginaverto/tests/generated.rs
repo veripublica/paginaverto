@@ -1001,3 +1001,30 @@ fn a_damaged_page_image_is_reported_by_inspect() {
     let found = paginaverto::inspect(Input::Bytes(&bytes), &Options::default()).unwrap();
     assert_eq!(found.pages[0].undecodable_image, Some("PNG"));
 }
+
+// ---------------------------------------------------------------------------
+// Building a document by hand, as a caller's tests do.
+
+#[test]
+fn a_document_built_by_hand_splits_into_chapters() {
+    use paginaverto::{Document, Figure, Run};
+    let mut doc = Document::default();
+    doc.blocks = vec![
+        Block::paragraph("b1", vec![Run::new("Before the first. ", false)]),
+        Block::heading("b2", 1, vec![Run::new("One", false)]),
+        Block::paragraph(
+            "b3",
+            vec![Run::new("Plain, ", false), Run::new("slanted", true)],
+        ),
+        Block::heading("b4", 2, vec![Run::new("Inside", false)]),
+        Block::figure("b5", Figure::new(vec![1, 2, 3], "image/png", "png")),
+    ];
+    let chapters = doc.chapters();
+    assert_eq!(chapters.len(), 2);
+    assert_eq!(chapters[0].title, None);
+    assert_eq!(chapters[1].title.as_deref(), Some("One"));
+    assert_eq!(chapters[1].blocks.len(), 3);
+    assert_eq!(chapters[1].blocks[0].text(), "Plain, slanted");
+    assert!(chapters[1].blocks[0].runs()[1].italic);
+    assert_eq!(chapters[1].blocks[1].level(), Some(2));
+}

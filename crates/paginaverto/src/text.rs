@@ -300,9 +300,12 @@ pub(crate) fn page(
         // A scan with a text layer: its page images are the pages, not figures.
         // One whose layer holds no text is a cover or a plate, and its image
         // is the content, so it is kept.
-        largest_image(doc, page_id)
-            .filter(|image| is_whole_page_picture(doc, image, max_image_pixels))
-            .and_then(|image| figure(doc, image, max_image_pixels))
+        layered_figure(doc, page_id, max_image_pixels)
+            .or_else(|| {
+                largest_image(doc, page_id)
+                    .filter(|image| is_whole_page_picture(doc, image, max_image_pixels))
+                    .and_then(|image| figure(doc, image, max_image_pixels))
+            })
             .into_iter()
             .collect()
     } else {
@@ -881,7 +884,10 @@ fn join_lines(
     let mut span = [f32::INFINITY, f32::INFINITY, f32::MIN, f32::MIN];
     let mut prev: Option<&Line> = None;
     for l in lines {
-        let indented = l.x > left + l.font;
+        // An indent of one font size is common: more than 0.6 of it counts. At
+        // more than a whole one, a book indented by exactly that read as 98
+        // paragraphs of 3,000 characters and more.
+        let indented = l.x > left + l.font * 0.6;
         // Lines indented alike are one block (a quotation) while the one
         // before runs on to the margin; a short one ended its paragraph.
         let continues_indent =
@@ -1635,19 +1641,70 @@ const MAX_GRAY_FIGURE_ASPECT: u32 = 8;
 /// emptiest picture seen had 2.6%, the inkiest near-empty box 1.3%.
 const MIN_GRAY_FIGURE_INK: f64 = 0.015;
 
-/// Is a text-less scan page's image a picture of the page? Not when it has a
-/// soft mask: then it is one layer of a page made of several (a colour layer
-/// shown through a text mask over a background), meaningless alone; putting the
-/// layers together is not done yet. Not when it is near empty either: a blank
-/// page. In 6 of the 18 PDFs measured, 34 such pages, each looked at: 3 covers
-/// and plates, 8 blank pages, 23 colour layers.
+/// Is a text-less scan page's one image a picture of the page? Not when it has
+/// a soft mask: then it is one layer of a page made of several, meaningless
+/// alone ([`layered_figure`] puts those together). Not when the page is blank.
 fn is_whole_page_picture(doc: &Document, image: &Stream, max_image_pixels: u64) -> bool {
     if image.dict.has(b"SMask") || image.dict.has(b"Mask") {
         return false;
     }
-    crate::decode::gray(doc, image, max_image_pixels).is_some_and(|gray| {
-        let ink = gray.pixels.iter().filter(|&&p| p < 128).count();
-        ink as f64 >= MIN_GRAY_FIGURE_INK * f64::from(gray.width) * f64::from(gray.height)
+    crate::decode::gray(doc, image, max_image_pixels).is_some_and(|gray| has_content(&gray.pixels))
+}
+
+/// Does a page image hold more than paper? Its paper is its median gray; content
+/// is what differs from that by more than 40 levels, and a page needs 3% of it.
+/// Of the text-less pages measured, blank ones and ones with only a library stamp
+/// or a pencilled shelf mark had at most 2%; a pale worksheet 4.8%; covers and
+/// plates 10.5% and more.
+/// Dark ink alone would have lost the pale worksheet.
+fn has_content(gray: &[u8]) -> bool {
+    let mut counts = [0usize; 256];
+    for &p in gray {
+        counts[usize::from(p)] += 1;
+    }
+    let half = gray.len() / 2;
+    let mut seen = 0;
+    let paper = counts
+        .iter()
+        .position(|&n| {
+            seen += n;
+            seen > half
+        })
+        .unwrap_or(255) as i32;
+    let off: usize = counts
+        .iter()
+        .enumerate()
+        .filter(|(level, _)| (*level as i32 - paper).abs() > 40)
+        .map(|(_, n)| n)
+        .sum();
+    !gray.is_empty() && off as f64 >= 0.03 * gray.len() as f64
+}
+
+/// A text-less scan page built of layers, put together, if it holds more than
+/// paper. Library scans build pages so: a background, and over it a colour
+/// layer shown through a text mask. In 6 of the 18 PDFs measured, 34 text-less
+/// pages, each looked at: 13 are now figures (covers, plates, end papers and one
+/// pale worksheet); the other 21 are blank, or hold only a library stamp or a
+/// shelf mark.
+fn layered_figure(doc: &Document, page_id: ObjectId, max_image_pixels: u64) -> Option<Figure> {
+    let res = resources(doc, page_id)?;
+    let images: Vec<&Stream> = images(doc, res).collect();
+    if !images.iter().any(|s| s.dict.has(b"SMask")) {
+        return None;
+    }
+    let page = crate::decode::layered_page(doc, &images, max_image_pixels)?;
+    let luma = image::DynamicImage::ImageRgb8(page.clone()).into_luma8();
+    if !has_content(luma.as_raw()) {
+        return None;
+    }
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(page)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(Figure {
+        data: png,
+        media_type: "image/png",
+        ext: "png",
     })
 }
 

@@ -240,7 +240,10 @@ paginaverto -i pages/ --language tr --ocr-models models/      # a folder of imag
 
 **What they read:** text in the Latin alphabet, which includes Turkish, English,
 Spanish, French, German and most European languages. Only Turkish and English
-are measured so far (see [Measurements](#measurements)). Other alphabets
+are measured so far (see [Measurements](#measurements)). In code,
+`paginaverto::recognises("tr")` says whether a language's letters are all in
+the model: true for 51 languages and `sr-Latn`, false for other scripts and for
+Azerbaijani, Vietnamese and Uzbek. Other alphabets
 (Cyrillic, Arabic, Greek, Chinese, …) need other models, which paginaverto does
 not take yet.
 
@@ -273,6 +276,10 @@ let doc = paginaverto::read(paginaverto::Input::Path("scan.pdf".as_ref()), &opts
 `MODEL_BASE_URL` and `LATIN_RECOGNITION_URL` where to fetch them; check the
 SHA-256 before loading. Which recognition model it is, is found from the model
 itself.
+
+For tests and tools, `Block::paragraph`, `Block::heading`, `Block::figure`,
+`Run::new` and `Figure::new` build a document by hand, starting from
+`Document::default()`.
 
 `inspect(input, &opts)` returns an `Inspection`: whether `read` would treat the
 document as a scan, each page's size and text source, and the fonts in use that
@@ -339,8 +346,8 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 - OCR reads the Latin alphabet only, with the Latin model; with ocrs's own
   model, ASCII only. Other alphabets need models paginaverto does not take yet.
   The text-layer path has no such limit. Only Turkish and English are measured.
-- OCR misses about one İ in three on the one Turkish scan measured, mostly
-  reading it as I.
+- OCR still misses about one İ in eight on the one Turkish scan measured, read
+  as I, even with İ favoured in Turkish.
 - OCR lines are cropped straight, so a strongly slanted page reads worse:
   following the slant lost more than it gained on the scan measured.
 - On noisy pages, OCR's paragraphs can run together: 4 or 5 of 6 on three of
@@ -354,9 +361,9 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
   times their width or under 1.5% ink). About 16 fragments of larger drawings in
   two books still pass as figures.
 - A scan with a text layer keeps a text-less page's image as a figure (a cover,
-  a plate), but not when that page is built of layers (an image with a soft
-  mask), as in many library scans: the layers are not put together yet, so the
-  picture is lost.
+  a plate) unless it is blank. A page built of layers is put together as library
+  scans build it: one background and colour layers through soft masks, all
+  taken to fill the page; other layouts of layers are not drawn.
 - A document classified as a scan goes through OCR on every page, and scans yield
   no figures.
 - Tables and equations come out as plain text.
@@ -366,7 +373,9 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
   during the load or while OCR's models load.
 - The limits bound the work, but are no guarantee of a memory ceiling: a page's
   content is parsed into many times its own size.
-- The language is required for OCR, and recorded, but OCR does not use it.
+- The language is required for OCR, and recorded. OCR uses it for one thing: in
+  Turkish and Azerbaijani, the Latin model favours İ over I and ı over i where it
+  hesitates.
 - A page image states its resolution, or it is taken at 300 dpi; the page size in
   points follows from that.
 - Chapters from a printed table of contents and from the look of the text are
@@ -427,15 +436,15 @@ plain `cargo update`.
   | | Arial clean | Arial noisy | Times clean | Times noisy |
   | --- | ---: | ---: | ---: | ---: |
   | English | 0.28% | 0.19% | 0.37% | 0.28% |
-  | Turkish | 0.48% | 0.58% | 0.67% | 0.58% |
+  | Turkish | 0.29% | 0.58% | 0.58% | 0.48% |
   | Turkish, letters folded to ASCII | 0.19% | 0.48% | 0.48% | 0.38% |
 
-  Paragraphs of 6: 6 on every clean page; 4 to 5 on the noisy ones. The same
+  Paragraphs of 6: 6 on every clean page; 4 to 6 on the noisy ones. The same
   pages as a folder of PNGs and as one multi-page TIFF give the same text as the
   PDF.
 
   CI runs the same set on Linux with Liberation Sans and Serif, the fonts metric
-  copies of Arial and Times, and fails above 2.00%. On a Mac: 0.19% to 1.05%.
+  copies of Arial and Times, and fails above 2.00%. On a Mac: 0.19% to 0.86%.
   That run found ocrs giving one line after the lines below it, which put it at
   the end of the page (11.60% on one page); each column's lines are now put top
   to bottom, which made it 0.29%.
@@ -449,21 +458,34 @@ plain `cargo update`.
   | ocrs's model | 55.70% | (48.60%) |
   | Latin model, crop with a margin of 0.1 line | 90.38% | (93.94%) |
   | Latin model, no margin | 94.30% | (95.38%) |
-  | Latin model, no margin, each column top to bottom (as shipped) | 94.18% | (95.24%) |
+  | Latin model, no margin, each column top to bottom | 94.18% | (95.24%) |
+  | The same, İ and ı favoured as Turkish (as shipped) | 95.40% | (96.09%) |
   | Latin model, margin of 0.25 line | 38.07% | (66.01%) |
   | Latin model, crop turned to the line's slant | 69.02% | (91.61%) |
 
-  The reference has 35,094 of ş ğ ı ç ö ü and 1,059 İ; ours 34,165 and 712.
-  Paragraphs 2,177, against the reference's 2,061; in order, 87.33% of the
-  reference's words line up with ours, 86.12% before the columns were sorted. Without flattening the
+  The reference has 35,094 of ş ğ ı ç ö ü and 1,059 İ; ours 34,716 and 983
+  (34,165 and 712 before İ and ı were favoured). Paragraphs 2,219, against the
+  reference's 2,061; in order, 88.39% of the reference's words line up with ours,
+  87.33% before İ and ı were favoured, 86.12% before the columns were sorted.
+  Favouring them by a factor of 3, 10 and 30 found 94.91%, 95.40% and 95.41%; at
+  30 the i fell below the reference's count, so 10 is used. Without flattening the
   lighting, 90.27% instead of 90.38%. 0.2.0 refused this scan.
 - **The 18 PDFs, 0.3 against 0.2.0,** 2026-11-05: 7 byte-identical. 5 with a
   text layer differ only in 29 page problems, now `image_not_read` instead of
   `undecodable_images`. 2 gained figures from JBIG2 images, 23 to 64 and 9 to
   31, with their text the same; all 175 new images in them were looked at, and
   the rule keeps every picture seen. Of 34 text-less pages in 6 scans with a
-  text layer, each looked at, 3 now keep their image (two covers, a plate); 8 are
-  blank, 23 are colour layers shown through a mask, meaningless alone. The JBIG2/JPX scan reads (above). The 2-page
+  text layer, each looked at, 13 now keep their image (covers, plates, end papers
+  and a pale worksheet, most of them put together from layers); 21 are blank or
+  hold only a library stamp or a shelf mark.
+- **Paragraph indents,** 2026-11-05, same 18 PDFs: an indent now counts from 0.6
+  of the font size, where it had to be more than one. One book indented by
+  exactly one font size goes from 1,652 to 2,543 paragraphs; those over 3,000
+  characters from 98 to 6, over 6,000 from 16 to 0; the 6 left are not looked
+  at. Another book keeps its 7 such paragraphs: the page looked at has lines of
+  even indent and ragged ends, likely verse or a list, where line ends say
+  nothing. Five others gain 1 to 21 paragraphs; the book measured against
+  Mistral is unchanged. The JBIG2/JPX scan reads (above). The 2-page
   English scan: 1,368 to 1,373 characters, equally word-like. The 15-page
   Turkish scan, whose pages hold little text, gives 976 to 572 characters, a fifth
   of them word-like either way.
