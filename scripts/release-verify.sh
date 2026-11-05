@@ -42,6 +42,38 @@ else
   bad "no release v$V"
 fi
 
+# ------------------------------------------------------------------ binaries
+# RELEASING §5: 8 archives, no version in the names, checksums over all of them,
+# a folder of the same name holding the binary and the licences. From 0.2.0 on.
+if [ "$(printf '%s\n' "$V" 0.2.0 | sort -V | head -1)" = 0.2.0 ]; then
+  ASSETS=$(gh release view "v$V" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null || true)
+  for T in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl aarch64-unknown-linux-gnu \
+           aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin; do
+    grep -qxF "paginaverto-$T.tar.gz" <<< "$ASSETS" && ok "binary $T" || bad "no binary for $T"
+  done
+  for T in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+    grep -qxF "paginaverto-$T.zip" <<< "$ASSETS" && ok "binary $T" || bad "no binary for $T"
+  done
+  grep -qxF SHA256SUMS.txt <<< "$ASSETS" && ok "SHA256SUMS.txt attached" || bad "no SHA256SUMS.txt"
+  D=$(mktemp -d)
+  if gh release download "v$V" --repo "$REPO" --dir "$D" \
+       --pattern SHA256SUMS.txt --pattern 'paginaverto-aarch64-apple-darwin.tar.gz' 2>/dev/null; then
+    [ "$(wc -l < "$D/SHA256SUMS.txt" | tr -d ' ')" = 8 ] && ok "checksums cover 8 archives" || bad "SHA256SUMS.txt is not 8 lines"
+    (cd "$D" && grep ' paginaverto-aarch64-apple-darwin.tar.gz$' SHA256SUMS.txt | shasum -a 256 -c - >/dev/null 2>&1) \
+      && ok "an archive matches its checksum" || bad "an archive does not match its checksum"
+    L=$(tar tzf "$D/paginaverto-aarch64-apple-darwin.tar.gz")
+    for F in paginaverto LICENSE LICENSE-COMMERCIAL.md LICENSING.md README.md; do
+      grep -qxF "paginaverto-aarch64-apple-darwin/$F" <<< "$L" && ok "archive holds $F" || bad "archive lacks $F"
+    done
+    tar xzf "$D/paginaverto-aarch64-apple-darwin.tar.gz" -C "$D"
+    [ "$("$D/paginaverto-aarch64-apple-darwin/paginaverto" -V 2>/dev/null)" = "paginaverto $V" ] \
+      && ok "the binary says its version" || bad "the binary does not say paginaverto $V"
+  else
+    bad "could not download the checksums and an archive"
+  fi
+  rm -rf "$D"
+fi
+
 REG=no; [ "$(printf '%s\n' "$V" 0.1.2 | sort -V | head -1)" = 0.1.2 ] && REG=yes
 # ------------------------------------------------------------------ crates.io
 [ "$REG" = yes ] && for c in paginaverto-ocr paginaverto; do

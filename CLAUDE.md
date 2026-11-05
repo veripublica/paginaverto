@@ -53,10 +53,10 @@ cargo +1.97 check --workspace --locked --features paginaverto/cli
 
 ## Releasing
 
-A `v*` tag releases everything: the GitHub Release page (`release.yml`),
+A `v*` tag releases everything: the GitHub Release page (`release.yml`), the
+8 binaries on it (`release-binaries.yml`, with `dry_run` to try it untagged),
 crates.io (`publish-crate.yml`: paginaverto-ocr, then paginaverto) and npm
-(`publish-npm.yml`: @veripublica/paginaverto-wasm). No binaries until there
-is a CLI. A registry version can never be reused. **Commit, tag and push only with Baris's explicit yes,
+(`publish-npm.yml`: @veripublica/paginaverto-wasm). A registry version can never be reused. **Commit, tag and push only with Baris's explicit yes,
 each time, asked right before the tag** — an earlier yes to the work does
 not cover the release. The family's model (kepubverto, epubsana): scripts do
 the work, the agents run them, the main session reviews, asks, tags, pushes.
@@ -80,11 +80,11 @@ the work, the agents run them, the main session reviews, asks, tags, pushes.
 4. **Ask Baris**, with the version, the notes, and the preflight verdict.
 5. On his yes: `git tag -a vX.Y.Z -m "…"` and `git push origin main vX.Y.Z`
    (main and tag together).
-6. **`release-verify` agent** runs `scripts/wait-runs.sh vX.Y.Z` (five
-   runs: CI, Pages, Release, crates.io, npm) then
+6. **`release-verify` agent** runs `scripts/wait-runs.sh vX.Y.Z` (six
+   runs: CI, Pages, Release, Release binaries, crates.io, npm) then
    `scripts/release-verify.sh X.Y.Z` (tag on origin, release page with the
    CHANGELOG section and registry links, both crates served with their
-   licences and no local-only file, the npm tarball with both licences, the
+   licences and no local-only file, the 8 binaries and their checksums, the npm tarball with both licences, the
    `.d.ts` and the `.wasm`, npm `latest`, the tag as a git dependency, web
    page up). Quote both verdicts. Don't rename the two publish workflows:
    the trust links name them.

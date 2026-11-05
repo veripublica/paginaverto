@@ -1,24 +1,24 @@
 # paginaverto
 
-paginaverto reads a PDF and gives you its text and structure: chapters, paragraphs and figures. It handles PDFs with a text layer and, with OCR switched on, plain scans. It's a Rust library for now, and it's what [epublift](https://github.com/ePubLift/epublift) uses to import PDFs. The name is Latin for turning pages.
+paginaverto reads a PDF and gives you its text and structure: chapters, paragraphs and figures. It handles PDFs with a text layer and, with OCR switched on, plain scans. It's a Rust library and a command-line tool, and it's what [epublift](https://github.com/ePubLift/epublift) uses to import PDFs. The name is Latin for turning pages.
 
 The easiest way to try it is [the web page](https://veripublica.github.io/paginaverto/). Your file stays in your browser and nothing is uploaded. The page only reads PDFs with a text layer, because OCR isn't in the browser yet.
 
 To use the library, add it with `cargo add paginaverto`, or `cargo add paginaverto --features ocr` for scans. Then:
 
 ```rust
-use paginaverto::{Block, Input, Options, read};
+use paginaverto::{Input, Options, read};
 
-let book = read(Input::Path("book.pdf".as_ref()), &Options::default())?;
-for chapter in &book.chapters {
+let doc = read(Input::Path("book.pdf".as_ref()), &Options::default())?;
+for chapter in doc.chapters() {
     println!("{:?}", chapter.title);
-    for block in &chapter.blocks {
-        if let Block::Paragraph(text) = block {
-            println!("{text}");
-        }
+    for block in chapter.blocks {
+        println!("{}", block.text());
     }
 }
 ```
+
+The command-line tool is on the [releases page](https://github.com/veripublica/paginaverto/releases/latest), or `cargo install --locked paginaverto --features cli`. `paginaverto -i book.pdf` writes `book.zip`, with the document as JSON and its figures.
 
 For JavaScript there is [`@veripublica/paginaverto-wasm`](https://www.npmjs.com/package/@veripublica/paginaverto-wasm) on npm.
 

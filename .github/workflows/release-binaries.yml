@@ -1,0 +1,182 @@
+name: Release binaries
+
+# Builds the `paginaverto` CLI for eight Linux/macOS/Windows targets and
+# attaches the archives, SHA256SUMS.txt and a provenance attestation to the
+# matching GitHub Release. The layout is kepubverto's (and epubveri's and
+# epubsana's), which conventions' release-asset draft codifies: one archive per
+# target named `paginaverto-<triple>.tar.gz` (`.zip` on Windows), no version in
+# the name, the binary in a folder of the same name.
+#
+# Pure Rust with no C dependencies, so every target builds on a runner of its
+# own architecture; ARM64 Windows is linked by MSVC from the x86_64 runner. The
+# tool sits behind the `cli` feature, since the library's default build must
+# never pull OCR. The release page and its notes are release.yml's; this only
+# attaches files to it. crates.io and npm are publish-crate.yml and
+# publish-npm.yml.
+# Triggered by a `v*` tag. `workflow_dispatch` re-runs it against an existing
+# tag, or, with `dry_run`, builds and checks every target without touching any
+# release (to try a change to this file before a tag needs it).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag/release to attach binaries to (e.g. v0.1.0); empty for a dry run"
+        required: false
+      dry_run:
+        description: "Build and check the archives only; attach nothing"
+        type: boolean
+        default: false
+
+# Read-only by default. Only the `release` job, which attaches files and signs
+# the attestation, is granted more.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64: glibc (mainstream distros) and musl (fully static).
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          # Linux ARM64, native on GitHub's ARM64 runner.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          # macOS: Intel and Apple Silicon.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # Windows: x86_64 (native) and ARM64 (cross-linked by MSVC).
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build (release)
+        run: cargo build --release --locked -p paginaverto --features cli --bin paginaverto --target ${{ matrix.target }}
+
+      # Only where the runner can run what it built.
+      - name: Check the binary starts
+        if: matrix.target != 'x86_64-apple-darwin' && matrix.target != 'aarch64-pc-windows-msvc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "target/${{ matrix.target }}/release/paginaverto" --version
+          "target/${{ matrix.target }}/release/paginaverto" --help > /dev/null
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          stage="paginaverto-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/paginaverto" "$stage/"
+          cp LICENSE LICENSE-COMMERCIAL.md LICENSING.md README.md "$stage/"
+          tar czf "$stage.tar.gz" "$stage"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = "paginaverto-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/paginaverto.exe" $stage/
+          Copy-Item LICENSE, LICENSE-COMMERCIAL.md, LICENSING.md, README.md $stage/
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: paginaverto-${{ matrix.target }}
+          path: |
+            paginaverto-${{ matrix.target }}.tar.gz
+            paginaverto-${{ matrix.target }}.zip
+          if-no-files-found: ignore
+
+  # Everything that writes to the release happens here, once, after all eight
+  # builds: the checksum list and the attestation must cover every archive.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # A manual run without a tag would otherwise attach to a release named
+      # after the branch.
+      - name: Check the tag
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: '$tag'" >&2; exit 1; }
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      # `if-no-files-found: ignore` above lets a packaging step that produced
+      # nothing pass, so count before anything is written: six tarballs and
+      # two zips.
+      - name: Check every target produced an archive
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -l
+          n=$(ls -1 paginaverto-*.tar.gz paginaverto-*.zip 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$n" -ne 8 ]; then
+            echo "expected 8 archives, found $n" >&2
+            exit 1
+          fi
+
+      - name: Write SHA256SUMS.txt
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum paginaverto-*.tar.gz paginaverto-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Stop here on a dry run: the archives built and counted, nothing signed
+      # or attached.
+      - name: Attest build provenance
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/paginaverto-*.tar.gz
+            dist/paginaverto-*.zip
+
+      - name: Attach to release
+        if: ${{ !inputs.dry_run }}
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: dist/*

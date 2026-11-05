@@ -5,16 +5,16 @@
 #
 # Usage: scripts/wait-runs.sh <tag-or-commit> [expected-runs] [timeout-seconds]
 #
-# A release push sends main and the tag together, so one commit carries five
-# runs: CI and Pages (main), and Release, crates.io and npm (the tag). A plain
-# push to main expects 2.
+# A release push sends main and the tag together, so one commit carries six
+# runs: CI and Pages (main), and Release, Release binaries, crates.io and npm
+# (the tag). A plain push to main expects 2.
 
 set -euo pipefail
 # ^{commit}: our tags are annotated, and a bare rev-parse of one gives the tag
 # object, which no run is filed under (0.1.3's wait saw 0 runs and timed out).
 SHA=$(git rev-parse "${1:?usage: scripts/wait-runs.sh <tag-or-commit> [expected-runs] [timeout-seconds]}^{commit}")
-N="${2:-5}"
-LIMIT="${3:-1500}"
+N="${2:-6}"
+LIMIT="${3:-3000}"
 REPO=veripublica/paginaverto
 
 runs() { gh run list --repo "$REPO" --commit "$SHA" --limit 20 --json name,status,conclusion,databaseId; }
