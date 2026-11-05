@@ -35,6 +35,9 @@ sed -i '' "s/^## \[Unreleased\]/## [Unreleased]\\
 # Updates only the three paginaverto entries of Cargo.lock; never a plain
 # `cargo update` (the lock matches epublift's).
 cargo check --workspace -q
+# The accuracy tool has its own lock, out of the workspace, and CI checks it
+# with --locked. The same: only the version lines of our own packages move.
+cargo check --manifest-path tools/ocr-accuracy/Cargo.toml -q
 
 grep -n -E '^version = |^paginaverto-ocr = ' Cargo.toml
 grep -n "^## \[" CHANGELOG.md | head -3
