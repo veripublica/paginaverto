@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hayro-ccitt",
  "hayro-jbig2",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto-ocr"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "image",
  "ocrs",

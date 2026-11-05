@@ -11,6 +11,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
 ### Added
 
 - **Turkish scans read as Turkish.** OCR can now read lines with PaddlePaddle's
@@ -30,8 +32,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 - **Every image format a PDF scan uses:** JBIG2, JPEG 2000 and CCITT fax, and
   raw images at 1, 2 or 4 bits, CMYK, indexed colour and image masks. All pure
   Rust. A scan stored this way used to be refused; the one measured now reads.
-  In a PDF with a text layer, such images now become figures (PNG) instead of
-  being skipped, if they look like pictures: at least 10,000 pixels, and, for
+  In a PDF with a text layer, such images now become figures instead of being
+  skipped, if they look like pictures: at least 10,000 pixels, and, for
   gray ones, no longer than 8 times their width and at least 1.5% ink. In two
   books, 175 such images were looked at one by one. The rule keeps every
   drawing, chart, photo and icon seen, and drops the rules, specks and empty
@@ -53,9 +55,9 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 - **`paginaverto::recognises(language)`** says whether OCR with the Latin model
   can read a language: its BCP-47 tag is written in Latin letters and the model
   has every one of them. True for 51 languages and Serbian in Latin letters
-  (`sr-Latn`), Turkish and English the only
-  ones measured; false for other scripts, a script subtag other than `Latn`, and
-  Azerbaijani, Vietnamese and Uzbek, whose letters the model lacks.
+  (`sr-Latn`), with Turkish and English the only ones measured; false for other
+  scripts, a script subtag other than `Latn`, and Azerbaijani, Vietnamese and
+  Uzbek, whose letters the model lacks.
 - **Constructors for tests and tools:** `Block::paragraph`, `Block::heading`,
   `Block::figure`, `Run::new` and `Figure::new`, with `Document::default()`, so a
   caller can build a document by hand.
@@ -85,6 +87,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   ocrs's model took 139 s.
 - **`Error::UndecodableImages`** now means the images failed to decode, not
   that their format is unknown to paginaverto.
+- **`THIRD-PARTY-NOTICES.md`** ships in `paginaverto-ocr` and with the
+  binaries: PaddleOCR's list of characters is built in, under Apache-2.0.
 - The web binding's `.wasm` grows with the image decoders, from 2.70 to 3.59 MB
   (1.08 to 1.34 MB gzipped).
 

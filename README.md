@@ -22,7 +22,7 @@ The command-line tool is on the [releases page](https://github.com/veripublica/p
 
 For JavaScript there is [`@veripublica/paginaverto-wasm`](https://www.npmjs.com/package/@veripublica/paginaverto-wasm) on npm.
 
-This is an early version. So far I've made it do what epublift's own PDF import did, faults included, so that I could check the switch byte by byte. I'm fixing those faults one at a time from 0.2, and that's also when a command-line tool and a richer document format arrive. OCR reads the Latin alphabet, Turkish letters included. I've measured Turkish and English so far, and I don't call any language supported until I've measured it.
+This is an early version. 0.1 did what epublift's own PDF import did, faults included, so that I could check the switch byte by byte. Since 0.2 I've been fixing those faults one at a time, each one measured, and there's now a command-line tool and a richer document format. OCR reads the Latin alphabet, Turkish letters included. I've measured Turkish and English so far, and I don't call any language supported until I've measured it.
 
 It runs offline and never downloads anything. You download the two OCR model files once yourself; [AGENTS.md](https://github.com/veripublica/paginaverto/blob/main/AGENTS.md#ocr-reading-scans-and-page-images) says how, step by step. The API, the known limits and the measurements are in [AGENTS.md](https://github.com/veripublica/paginaverto/blob/main/AGENTS.md).
 
