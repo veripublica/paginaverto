@@ -296,6 +296,15 @@ pub(crate) fn page(
     };
     let figures = if with_figures {
         figures(doc, page_id, max_image_pixels)
+    } else if !born_digital && blocks.is_empty() {
+        // A scan with a text layer: its page images are the pages, not figures.
+        // One whose layer holds no text is a cover or a plate, and its image
+        // is the content, so it is kept.
+        largest_image(doc, page_id)
+            .filter(|image| is_whole_page_picture(doc, image, max_image_pixels))
+            .and_then(|image| figure(doc, image, max_image_pixels))
+            .into_iter()
+            .collect()
     } else {
         Vec::new()
     };
@@ -1613,13 +1622,54 @@ fn figure(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figu
     }
 }
 
-/// Below this many pixels, a newly decodable image is a mark, not a picture: in
-/// two of the 18 PDFs measured, 293 fax images averaged about 22 by 22 pixels.
-const MIN_DECODED_FIGURE_PIXELS: u64 = 4096;
+/// Newly decodable images become figures only if they look like pictures. In
+/// two books, 175 such images were looked at: rules (2,368 by 7), stray strokes,
+/// specks and near-empty boxes on one side, drawings, charts, photos, a barcode
+/// and icons down to 112 by 112 on the other. These keep every picture seen and
+/// drop the rest but about 16 fragments of larger drawings, which nothing short
+/// of reading the page tells from small pictures.
+const MIN_DECODED_FIGURE_PIXELS: u64 = 10_000;
+/// A gray image longer than this many times its width is a rule.
+const MAX_GRAY_FIGURE_ASPECT: u32 = 8;
+/// A gray image with less of it ink (darker than half) is near empty: the
+/// emptiest picture seen had 2.6%, the inkiest near-empty box 1.3%.
+const MIN_GRAY_FIGURE_INK: f64 = 0.015;
+
+/// Is a text-less scan page's image a picture of the page? Not when it has a
+/// soft mask: then it is one layer of a page made of several (a colour layer
+/// shown through a text mask over a background), meaningless alone; putting the
+/// layers together is not done yet. Not when it is near empty either: a blank
+/// page. In 6 of the 18 PDFs measured, 34 such pages, each looked at: 3 covers
+/// and plates, 8 blank pages, 23 colour layers.
+fn is_whole_page_picture(doc: &Document, image: &Stream, max_image_pixels: u64) -> bool {
+    if image.dict.has(b"SMask") || image.dict.has(b"Mask") {
+        return false;
+    }
+    crate::decode::gray(doc, image, max_image_pixels).is_some_and(|gray| {
+        let ink = gray.pixels.iter().filter(|&&p| p < 128).count();
+        ink as f64 >= MIN_GRAY_FIGURE_INK * f64::from(gray.width) * f64::from(gray.height)
+    })
+}
+
+/// Is a decoded image worth a figure?
+fn is_picture(image: &image::DynamicImage) -> bool {
+    let (w, h) = (image.width(), image.height());
+    if u64::from(w) * u64::from(h) < MIN_DECODED_FIGURE_PIXELS {
+        return false;
+    }
+    match image {
+        image::DynamicImage::ImageLuma8(gray) => {
+            let ink = gray.pixels().filter(|p| p[0] < 128).count();
+            w.max(h) <= MAX_GRAY_FIGURE_ASPECT * w.min(h)
+                && ink as f64 >= MIN_GRAY_FIGURE_INK * f64::from(w) * f64::from(h)
+        }
+        _ => true,
+    }
+}
 
 fn decoded_png(doc: &Document, stream: &Stream, max_image_pixels: u64) -> Option<Figure> {
     let image = crate::decode::figure_pixels(doc, stream, max_image_pixels)?;
-    if u64::from(image.width()) * u64::from(image.height()) < MIN_DECODED_FIGURE_PIXELS {
+    if !is_picture(&image) {
         return None;
     }
     let mut png = Vec::new();
@@ -1723,6 +1773,26 @@ fn components(doc: &Document, dict: &Dictionary) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rule_a_speck_and_an_empty_box_are_no_pictures_but_a_drawing_is() {
+        let gray = |w, h, inked: &dyn Fn(u32, u32) -> bool| {
+            image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(w, h, |x, y| {
+                image::Luma([if inked(x, y) { 0 } else { 255 }])
+            }))
+        };
+        assert!(!is_picture(&gray(2368, 7, &|_, _| true)), "a rule");
+        assert!(!is_picture(&gray(1200, 100, &|_, _| true)), "a thick rule");
+        assert!(!is_picture(&gray(90, 90, &|_, _| true)), "a speck");
+        assert!(is_picture(&gray(112, 112, &|x, _| x % 4 == 0)), "an icon");
+        assert!(!is_picture(&gray(800, 800, &|x, y| x == y)), "nearly empty");
+        assert!(
+            is_picture(&gray(800, 600, &|x, y| x % 20 == 0 || y % 20 == 0)),
+            "a grid"
+        );
+        let rgb = image::DynamicImage::ImageRgb8(image::RgbImage::new(120, 120));
+        assert!(is_picture(&rgb), "colour is not judged by ink");
+    }
 
     #[test]
     fn cmap_bfchar() {

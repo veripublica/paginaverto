@@ -790,7 +790,18 @@ fn outline_titles_do_not_hide_a_pdf_with_no_text() {
 // Image codecs, against fixtures made by tests/fixtures/make.py from a fixed
 // pattern rebuilt here.
 
-const PATTERN: (u32, u32) = (80, 64);
+const PATTERN: (u32, u32) = (400, 400);
+/// The pattern's blocks, and how many there are across.
+const BLOCK: u32 = 16;
+const BLOCKS_ACROSS: u32 = PATTERN.0.div_ceil(BLOCK);
+const BLOCKS: usize = (BLOCKS_ACROSS * PATTERN.1.div_ceil(BLOCK)) as usize;
+
+/// Each pixel's block, row by row, as make.py lays them.
+fn blocks() -> impl Iterator<Item = usize> {
+    (0..PATTERN.1).flat_map(|y| {
+        (0..PATTERN.0).map(move |x| ((y / BLOCK) * BLOCKS_ACROSS + x / BLOCK) as usize)
+    })
+}
 
 /// The C library's rand(), as make.py draws it.
 fn pattern(n: usize) -> Vec<u32> {
@@ -856,9 +867,9 @@ fn a_group4_fax_figure_decodes_to_its_exact_pixels() {
         },
     );
     let got = the_figure(dict, include_bytes!("fixtures/pattern.g4").to_vec()).into_luma8();
-    let want: Vec<u8> = pattern((PATTERN.0 * PATTERN.1) as usize)
-        .iter()
-        .map(|v| if v & 1 == 1 { 255 } else { 0 })
+    let r = pattern(BLOCKS);
+    let want: Vec<u8> = blocks()
+        .map(|b| if r[b] & 1 == 1 { 255 } else { 0 })
         .collect();
     assert_eq!(got.dimensions(), PATTERN);
     assert_eq!(got.into_raw(), want);
@@ -866,21 +877,21 @@ fn a_group4_fax_figure_decodes_to_its_exact_pixels() {
 
 #[test]
 fn a_lossless_jpeg_2000_figure_decodes_to_its_exact_pixels() {
-    let n = (PATTERN.0 * PATTERN.1) as usize;
+    let n = BLOCKS;
     let r = pattern(n * 3);
     let gray = the_figure(
         image_dict("JPXDecode", "DeviceGray", 8),
         include_bytes!("fixtures/pattern.jp2").to_vec(),
     );
-    let want: Vec<u8> = r[..n].iter().map(|v| (v & 255) as u8).collect();
+    let want: Vec<u8> = blocks().map(|b| (r[b] & 255) as u8).collect();
     assert_eq!(gray.into_luma8().into_raw(), want);
 
     let rgb = the_figure(
         image_dict("JPXDecode", "DeviceRGB", 8),
         include_bytes!("fixtures/pattern-rgb.jp2").to_vec(),
     );
-    let want: Vec<u8> = (0..n)
-        .flat_map(|i| [r[i], r[i + n], r[i + 2 * n]].map(|v| (v & 255) as u8))
+    let want: Vec<u8> = blocks()
+        .flat_map(|b| [r[b], r[b + n], r[b + 2 * n]].map(|v| (v & 255) as u8))
         .collect();
     assert_eq!(rgb.into_rgb8().into_raw(), want);
 }

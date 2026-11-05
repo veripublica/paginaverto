@@ -349,8 +349,14 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
 - OCR with the Latin model takes about twice as long as with ocrs's: 261 s for a
   292-page scan on 10 cores.
 - Figures are placed after their page's text, not at their exact position.
-  Indexed-colour and CMYK raw images are skipped, and decoded images under
-  4,096 pixels (marks, not pictures).
+  Indexed-colour and CMYK raw images are skipped, and newly decodable images
+  that do not look like pictures (under 10,000 pixels; gray ones longer than 8
+  times their width or under 1.5% ink). About 16 fragments of larger drawings in
+  two books still pass as figures.
+- A scan with a text layer keeps a text-less page's image as a figure (a cover,
+  a plate), but not when that page is built of layers (an image with a soft
+  mask), as in many library scans: the layers are not put together yet, so the
+  picture is lost.
 - A document classified as a scan goes through OCR on every page, and scans yield
   no figures.
 - Tables and equations come out as plain text.
@@ -453,8 +459,11 @@ plain `cargo update`.
   lighting, 90.27% instead of 90.38%. 0.2.0 refused this scan.
 - **The 18 PDFs, 0.3 against 0.2.0,** 2026-11-05: 7 byte-identical. 5 with a
   text layer differ only in 29 page problems, now `image_not_read` instead of
-  `undecodable_images`. 2 gained figures from JBIG2 images, 23 to 170 and 9 to
-  37, with their text the same. The JBIG2/JPX scan reads (above). The 2-page
+  `undecodable_images`. 2 gained figures from JBIG2 images, 23 to 64 and 9 to
+  31, with their text the same; all 175 new images in them were looked at, and
+  the rule keeps every picture seen. Of 34 text-less pages in 6 scans with a
+  text layer, each looked at, 3 now keep their image (two covers, a plate); 8 are
+  blank, 23 are colour layers shown through a mask, meaningless alone. The JBIG2/JPX scan reads (above). The 2-page
   English scan: 1,368 to 1,373 characters, equally word-like. The 15-page
   Turkish scan, whose pages hold little text, gives 976 to 572 characters, a fifth
   of them word-like either way.

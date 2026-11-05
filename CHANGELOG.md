@@ -26,10 +26,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   raw images at 1, 2 or 4 bits, CMYK, indexed colour and image masks. All pure
   Rust. A scan stored this way used to be refused; the one measured now reads.
   In a PDF with a text layer, such images now become figures (PNG) instead of
-  being skipped, unless they are smaller than 4,096 pixels: marks, not
-  pictures. On the 18 PDFs measured, two books gained figures, 23 to 170 and 9
-  to 37, and their text is unchanged. Indexed-colour and CMYK raw images are
-  still skipped.
+  being skipped, if they look like pictures: at least 10,000 pixels, and, for
+  gray ones, no longer than 8 times their width and at least 1.5% ink. In two
+  books, 175 such images were looked at one by one. The rule keeps every
+  drawing, chart, photo and icon seen, and drops the rules, specks and empty
+  boxes; about 16 fragments of larger drawings still pass. Those books gained
+  figures, 23 to 64 and 9 to 31, and their text is unchanged. Indexed-colour and
+  CMYK raw images are still skipped.
+- **Covers and plates of scans with a text layer:** a page whose layer holds no
+  text keeps its image as a figure, unless the image is blank or one layer of a
+  page built of several (it has a soft mask). On the 18 PDFs, 34 such pages,
+  each looked at: 3 kept (two covers and a plate), 8 blank, 23 layers. A page built of layers, as
+  in many library scans, still loses its picture; putting the layers together
+  comes later.
 - **Page images as input:** a PNG, JPEG or TIFF file (every page of a
   multi-page TIFF), or a folder of them, read in natural name order.
   `read` and `paginaverto -i` take them as they take a PDF; the format is found

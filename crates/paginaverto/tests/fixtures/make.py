@@ -1,11 +1,13 @@
 """Writes the image-codec fixtures from a fixed pseudo-random pattern, which the
-tests rebuild to compare pixel by pixel. Nothing here is from a document.
+tests rebuild to compare pixel by pixel. Nothing here is from a document. The
+pattern is 16-pixel blocks, so that it compresses, on a 400-pixel square: a gray
+figure smaller than that on a side is not kept.
 
     uv run --no-project --with pillow==13.0.0 python make.py
 
-pattern.g4    CCITT Group 4 data of the bilevel pattern, 80 x 64, 0 = black.
-pattern.jp2   the gray pattern, 80 x 64, JPEG 2000, lossless.
-pattern-rgb.jp2  the RGB pattern, 80 x 64, JPEG 2000, lossless.
+pattern.g4    CCITT Group 4 data of the bilevel pattern, 400 x 400, 0 = black.
+pattern.jp2   the gray pattern, 400 x 400, JPEG 2000, lossless.
+pattern-rgb.jp2  the RGB pattern, 400 x 400, JPEG 2000, lossless.
 """
 
 import io
@@ -13,7 +15,9 @@ import pathlib
 
 from PIL import Image, TiffImagePlugin
 
-W, H = 80, 64
+W, H = 400, 400
+B = 16
+COLS = (W + B - 1) // B
 HERE = pathlib.Path(__file__).parent
 
 
@@ -28,13 +32,15 @@ def lcg(n):
 
 
 def main():
-    r = lcg(W * H * 3)
+    n = COLS * ((H + B - 1) // B)
+    r = lcg(n * 3)
+    block = [(y // B) * COLS + x // B for y in range(H) for x in range(W)]
     bilevel = Image.new("1", (W, H))
-    bilevel.putdata([255 if v & 1 else 0 for v in r[: W * H]])
+    bilevel.putdata([255 if r[b] & 1 else 0 for b in block])
     gray = Image.new("L", (W, H))
-    gray.putdata([v & 255 for v in r[: W * H]])
+    gray.putdata([r[b] & 255 for b in block])
     rgb = Image.new("RGB", (W, H))
-    rgb.putdata([(r[i] & 255, r[i + W * H] & 255, r[i + 2 * W * H] & 255) for i in range(W * H)])
+    rgb.putdata([(r[b] & 255, r[b + n] & 255, r[b + 2 * n] & 255) for b in block])
 
     # Group 4 in a one-strip TIFF; the strip is the raw CCITT data a PDF holds.
     buf = io.BytesIO()
