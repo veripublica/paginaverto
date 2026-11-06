@@ -99,7 +99,7 @@ pub(crate) fn build(pages: &[Page], marks: Option<&[Mark]>) -> Built {
                 skip_to = f.end;
                 first_on_page = false;
                 let text = match f.whole {
-                    true => block.text.clone(),
+                    true => with_soft_hyphens_resolved(&block.text),
                     false => Marked::plain(f.mark.title.clone()),
                 };
                 items.push(Item::Heading {
@@ -389,6 +389,7 @@ fn union(blocks: &[TextBlock]) -> Vec<BlockBox> {
 
 /// The text with its line-break hyphens gone, whitespace collapsed.
 fn without_hyphens(text: &Marked, dehyphen: &Regex) -> Marked {
+    let text = &with_soft_hyphens_resolved(text);
     let cut: Vec<_> = dehyphen
         .captures_iter(&text.text)
         .filter_map(|c| Some(c.get(1)?.end()..c.get(2)?.start()))
@@ -398,6 +399,46 @@ fn without_hyphens(text: &Marked, dehyphen: &Regex) -> Marked {
     } else {
         text.without(&cut).squashed()
     }
+}
+
+/// A soft hyphen (U+00AD) is shown only where a line breaks, so between two
+/// letters it joins them, with the line break after it. At the end of the text
+/// it becomes a `-`, so a word broken across pages joins as a hard one does.
+/// Anywhere else it goes.
+fn with_soft_hyphens_resolved(text: &Marked) -> Marked {
+    if !text.text.contains('\u{ad}') {
+        return text.clone();
+    }
+    let chars: Vec<(char, bool)> = text.text.chars().zip(text.italic.iter().copied()).collect();
+    let mut out = Marked::default();
+    let mut i = 0;
+    while i < chars.len() {
+        let (c, italic) = chars[i];
+        i += 1;
+        if c != '\u{ad}' {
+            out.text.push(c);
+            out.italic.push(italic);
+            continue;
+        }
+        let mut next = i;
+        while chars
+            .get(next)
+            .is_some_and(|(c, _)| c.is_whitespace() || *c == '\u{ad}')
+        {
+            next += 1;
+        }
+        let after_letter = out.text.chars().last().is_some_and(char::is_alphabetic);
+        match chars.get(next) {
+            None if after_letter => {
+                out.text.push('-');
+                out.italic.push(italic);
+                i = next;
+            }
+            Some((n, _)) if after_letter && n.is_alphabetic() => i = next,
+            _ => {}
+        }
+    }
+    out
 }
 
 /// A page's first block continues the paragraph the last page ended on, if
@@ -568,6 +609,26 @@ mod tests {
             "Gazeteci- \nlerin çoğu, öğ- rencilerle geldi.",
         ])]));
         assert_eq!(text, "Gazetecilerin çoğu, öğrencilerle geldi.");
+    }
+
+    #[test]
+    fn joins_soft_hyphens() {
+        let text = body(&blocks(&[page(&[
+            "Gazeteci\u{ad} \nlerin çoğu, öğ\u{ad} rencilerle TÜRKİ\u{ad} YE'ye geldi. Ne\u{ad}ler, 1\u{ad} 2.",
+        ])]));
+        assert_eq!(
+            text,
+            "Gazetecilerin çoğu, öğrencilerle TÜRKİYE'ye geldi. Neler, 1 2."
+        );
+    }
+
+    #[test]
+    fn a_soft_hyphen_joins_across_a_page() {
+        let text = body(&blocks(&[
+            page(&["Bu kitabın keli\u{ad}"]),
+            page(&["meleri okundu."]),
+        ]));
+        assert_eq!(text, "Bu kitabın kelimeleri okundu.");
     }
 
     #[test]

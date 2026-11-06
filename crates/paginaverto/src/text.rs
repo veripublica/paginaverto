@@ -843,7 +843,7 @@ fn blocks_from_runs(runs: &[Run], page: u32, frame: &Frame) -> Vec<TextBlock> {
             y: y0,
             x: group.iter().map(|r| r.x).fold(f32::INFINITY, f32::min),
             end: group.iter().map(|r| r.end_x).fold(f32::MIN, f32::max),
-            font: group.iter().map(|r| r.font_size).fold(0.0, f32::max),
+            font: main_size(&group),
             top: group
                 .iter()
                 .map(|r| r.y + r.font_size * GLYPH_ABOVE)
@@ -873,6 +873,26 @@ struct Line {
     top: f32,
     bottom: f32,
     text: Marked,
+}
+
+/// The font size most of a line's characters are set in; of two as common, the
+/// larger. A large list number or one odd glyph does not make the line large.
+fn main_size(runs: &[&Run]) -> f32 {
+    let mut sizes: Vec<(f32, usize)> = Vec::new();
+    for r in runs {
+        let n = r.text.chars().filter(|c| !c.is_whitespace()).count();
+        match sizes
+            .iter_mut()
+            .find(|(s, _)| (*s - r.font_size).abs() < 0.01)
+        {
+            Some((_, count)) => *count += n,
+            None => sizes.push((r.font_size, n)),
+        }
+    }
+    sizes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(a.0.total_cmp(&b.0)))
+        .map_or(0.0, |(s, _)| s)
 }
 
 /// Lines to paragraph blocks: a new block at a large vertical gap, a change of
@@ -1869,6 +1889,30 @@ fn components(doc: &Document, dict: &Dictionary) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A large list number at the start of a line, or one odd glyph in it,
+    /// does not split the paragraph the line belongs to.
+    #[test]
+    fn one_large_glyph_does_not_make_a_line_large() {
+        let run = |text: &str, size: f32, x: f32, y: f32| Run {
+            text: text.to_string(),
+            font_size: size,
+            x,
+            end_x: x + text.chars().count() as f32 * size * 0.5,
+            y,
+            italic: false,
+        };
+        let runs = [
+            run("This paragraph runs on to the next", 10.0, 72.0, 700.0),
+            run("1.", 15.5, 60.0, 686.0),
+            run("line and then ends here.", 10.0, 72.0, 686.0),
+            run("A word set", 10.0, 72.0, 672.0),
+            run("o", 20.0, 125.0, 672.0),
+            run("in a larger size, still one paragraph.", 10.0, 132.0, 672.0),
+        ];
+        let blocks = blocks_from_runs(&runs, 1, &Frame::sized(612.0, 792.0));
+        assert_eq!(blocks.len(), 1, "{blocks:?}");
+    }
 
     #[test]
     fn a_rule_a_speck_and_an_empty_box_are_no_pictures_but_a_drawing_is() {

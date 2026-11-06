@@ -11,6 +11,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Soft hyphens join the word they break.** Some PDFs end a line with a soft
+  hyphen (U+00AD) rather than `-`. It stayed in the text with a space after it,
+  so a reader showed the word in two pieces, and search and text-to-speech
+  broke. Now it joins the two halves, across a page too, and goes. 4 of 18 local
+  PDFs had them, 1,794 to 4,570 each; none is left.
+- **One large glyph no longer splits a paragraph.** A line's size was that of
+  its largest glyph, so a large list number or one odd glyph made the line look
+  like a change of font, and the paragraph broke there. A line's size is now
+  the size most of its characters are set in. 5 of 18 local PDFs have 14 to
+  142 fewer blocks, and one has 2 more. Paragraphs starting in lower case fell
+  on those five (82 → 71, 79 → 67, 82 → 46, 22 → 5, 503 → 428) and rose by 2 on
+  the sixth. Headings and figures are unchanged.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added
