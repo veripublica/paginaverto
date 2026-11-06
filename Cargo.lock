@@ -688,7 +688,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "paginaverto"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "hayro-ccitt",
  "hayro-jbig2",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto-ocr"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "ocrs",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto-wasm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "getrandom",
  "js-sys",

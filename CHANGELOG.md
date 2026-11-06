@@ -11,12 +11,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-06
+
 ### Added
 
 - **The cover.** When page 1 of a PDF is a cover, a page image with no text
-  drawn over it and little text in its text layer or read by OCR, `Document::cover` holds its picture and nothing of
-  page 1 is in `blocks`. Before, a scan's cover came out as paragraphs of its
-  OCR layer, and a cover image as the first figure. The picture is the PDF's own
+  drawn over it and little text in its text layer or read by OCR,
+  `Document::cover` holds its picture and nothing of page 1 is in `blocks`.
+  Before, a scan's cover came out as paragraphs of its OCR layer or of what OCR
+  read, and a cover image as the first figure. The picture is the PDF's own
   JPEG where it is one, else put together from the page's layers; its size is
   the PDF's, and what to make of it is the reader's to decide. In `document.json`
   it is `cover`, with the file `figures/cover.jpg` (or `.png`), and in the npm
