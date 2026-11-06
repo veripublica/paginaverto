@@ -84,10 +84,21 @@ export interface OutlineEntry {
   page: number | null;
 }
 
+/** The cover: page 1's picture, when page 1 is one. */
+export interface Cover {
+  mediaType: "image/jpeg" | "image/png";
+  ext: "jpg" | "png";
+  /** The image file's bytes. */
+  data: Uint8Array;
+}
+
 /** What a PDF turned into. `chapters` is never empty. */
 export interface Book {
   /** The content's language, if the file says. */
   language: string | null;
+  /** Page 1's picture, when it is a cover; nothing of page 1 is then in
+   * `chapters`. `null` otherwise. */
+  cover: Cover | null;
   outline: OutlineEntry[];
   pages: Page[];
   chapters: Chapter[];
@@ -238,6 +249,14 @@ fn to_js(doc: &Document) -> JsValue {
         "language",
         &doc.language.as_deref().map_or(JsValue::NULL, Into::into),
     );
+    let cover = doc.cover.as_ref().map_or(JsValue::NULL, |f| {
+        let o = Object::new();
+        set(&o, "mediaType", &f.media_type.into());
+        set(&o, "ext", &f.ext.into());
+        set(&o, "data", &Uint8Array::from(f.data.as_slice()).into());
+        o.into()
+    });
+    set(&out, "cover", &cover);
     set(&out, "outline", &outline);
     set(&out, "pages", &pages);
     set(&out, "chapters", &chapters);

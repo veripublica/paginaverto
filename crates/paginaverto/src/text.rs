@@ -237,6 +237,8 @@ pub(crate) struct Page {
     pub source: TextSource,
     /// What went wrong on it.
     pub problems: Vec<PageProblem>,
+    /// Page 1 is a cover: its picture. The page then has no blocks or figures.
+    pub cover: Option<Figure>,
 }
 
 impl Default for Page {
@@ -250,6 +252,7 @@ impl Default for Page {
             size: (0.0, 0.0),
             source: TextSource::None,
             problems: Vec::new(),
+            cover: None,
         }
     }
 }
@@ -295,6 +298,17 @@ pub(crate) fn page(
             theirs
         }
     };
+    if page_num == 1
+        && !born_digital
+        && let Some(cover) = cover(doc, page_id, &blocks, max_image_pixels)
+    {
+        return Page {
+            number: page_num,
+            size: frame.size(),
+            cover: Some(cover),
+            ..Page::default()
+        };
+    }
     let figures: Vec<(Figure, Vec<BlockBox>)> = if with_figures {
         figures(doc, page_id, max_image_pixels)
             .into_iter()
@@ -355,7 +369,109 @@ pub(crate) fn page(
         size: frame.size(),
         source,
         problems,
+        cover: None,
     }
+}
+
+/// Text on a cover that is a picture: its OCR layer, what OCR reads on it, or
+/// none. Of 14 covers in 18 local PDFs, the most held 92 characters; a page of
+/// a book holds about 1,500.
+const MAX_COVER_TEXT: usize = 300;
+
+/// Page 1 as a cover: its picture, when a page image fills it, no text is drawn
+/// over it (a scan's OCR layer is invisible), little text is under it, and it
+/// holds more than paper. A cover made of pieces, with its lettering set in
+/// fonts over them, has no one picture to give, and stays as it is.
+fn cover(
+    doc: &Document,
+    page_id: ObjectId,
+    blocks: &[TextBlock],
+    max_image_pixels: u64,
+) -> Option<Figure> {
+    if !is_cover_text(blocks) || has_visible_text(doc, page_id) {
+        return None;
+    }
+    cover_picture(doc, page_id, max_image_pixels)
+}
+
+/// Is this little enough text for a cover: its OCR layer, or what OCR reads?
+pub(crate) fn is_cover_text(blocks: &[TextBlock]) -> bool {
+    let text: usize = blocks.iter().map(|b| b.text.text.chars().count()).sum();
+    text <= MAX_COVER_TEXT
+}
+
+/// The picture of a page that is one: its layers put together, or its page
+/// image.
+pub(crate) fn cover_picture(
+    doc: &Document,
+    page_id: ObjectId,
+    max_image_pixels: u64,
+) -> Option<Figure> {
+    layered_figure(doc, page_id, max_image_pixels).or_else(|| {
+        largest_image(doc, page_id)
+            .filter(|image| is_whole_page_picture(doc, image, max_image_pixels))
+            .and_then(|image| figure(doc, image, max_image_pixels))
+    })
+}
+
+/// Does the page draw text that shows? Not text in render mode 3 (neither
+/// filled nor stroked) or 7 (only a clip), nor text a full-page image is drawn
+/// over afterwards: those are the two ways scans lay their OCR layer under the
+/// picture. On page 1 of 18 local PDFs, 6 did the first and 1 the second; 2
+/// set lettering in fonts over the picture.
+fn has_visible_text(doc: &Document, page_id: ObjectId) -> bool {
+    let Ok(content) = Content::decode(&doc.get_page_content(page_id)) else {
+        return false;
+    };
+    let xobjects = resources(doc, page_id)
+        .and_then(|res| res.get(b"XObject").ok())
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_dict().ok());
+    let covers_page = |name: &[u8]| {
+        xobjects
+            .and_then(|x| x.get(name).ok())
+            .and_then(|o| deref(doc, o))
+            .and_then(|o| o.as_stream().ok())
+            .is_some_and(|s| {
+                s.dict.get(b"Subtype").ok().and_then(|o| o.as_name().ok()) == Some(b"Image")
+                    && pixel_area(s) > FULL_PAGE_PIXELS
+                    && !s.dict.has(b"SMask")
+                    && !s.dict.has(b"Mask")
+            })
+    };
+    let mut mode = 0;
+    let mut saved = Vec::new();
+    let mut shown = false;
+    for op in &content.operations {
+        match op.operator.as_str() {
+            "q" => saved.push(mode),
+            "Q" => mode = saved.pop().unwrap_or(0),
+            "Tr" => {
+                mode = op
+                    .operands
+                    .first()
+                    .and_then(|o| o.as_i64().ok())
+                    .unwrap_or(0)
+            }
+            "Tj" | "'" | "\"" | "TJ" if mode != 3 && mode != 7 => {
+                let any = |o: &Object| matches!(o, Object::String(b, _) if !b.is_empty());
+                shown |= op.operands.iter().any(|o| match o {
+                    Object::Array(a) => a.iter().any(any),
+                    o => any(o),
+                });
+            }
+            "Do" if op
+                .operands
+                .first()
+                .and_then(|o| o.as_name().ok())
+                .is_some_and(covers_page) =>
+            {
+                shown = false;
+            }
+            _ => {}
+        }
+    }
+    shown
 }
 
 /// The visible part of a page, and how it is turned.
@@ -1726,7 +1842,10 @@ fn has_content(gray: &[u8]) -> bool {
 fn layered_figure(doc: &Document, page_id: ObjectId, max_image_pixels: u64) -> Option<Figure> {
     let res = resources(doc, page_id)?;
     let images: Vec<&Stream> = images(doc, res).collect();
-    if !images.iter().any(|s| s.dict.has(b"SMask")) {
+    let masked = |s: &&Stream| {
+        s.dict.has(b"SMask") || s.dict.get(b"Mask").is_ok_and(|m| m.as_reference().is_ok())
+    };
+    if !images.iter().any(masked) {
         return None;
     }
     let page = crate::decode::layered_page(doc, &images, max_image_pixels)?;

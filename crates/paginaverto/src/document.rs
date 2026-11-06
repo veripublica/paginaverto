@@ -27,6 +27,12 @@ pub struct Document {
     /// Everything read, in reading order. Never empty: an empty result is an
     /// [`Error`](crate::Error). A page's figures come after its text.
     pub blocks: Vec<Block>,
+    /// The cover, when page 1 is one: its picture, as it is in the PDF where it
+    /// can be (a JPEG's own bytes), and nothing of page 1 in `blocks`. Page 1
+    /// is a cover when a page image fills it with no text drawn over it and
+    /// little under it: under its text layer in a PDF with one, or read by OCR
+    /// in a scan. None otherwise.
+    pub cover: Option<Figure>,
 }
 
 impl Document {

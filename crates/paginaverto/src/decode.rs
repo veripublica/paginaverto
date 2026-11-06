@@ -309,36 +309,45 @@ fn colour(doc: &Document, stream: &Stream, max_pixels: u64) -> Option<image::Rgb
 /// A page made of layers, as library scans make them: one image without a mask
 /// (the background, often at a lower resolution), and over it one or more
 /// images each shown through its soft mask (the text and lines, in their
-/// colour). All are assumed to fill the page, as such scans draw them. The page
-/// put together at the first layer's size, or `None` if it is not built so.
+/// colour), or through a stencil `/Mask` as other scanners make them. All are
+/// assumed to fill the page, as such scans draw them. The page put together at
+/// the largest layer's size, or `None` if it is not built so.
 pub(crate) fn layered_page(
     doc: &Document,
     images: &[&Stream],
     max_pixels: u64,
 ) -> Option<image::RgbImage> {
     use image::imageops::{self, FilterType};
+    // A soft mask's sample is how opaque the layer is there; a stencil
+    // mask's sample of 0 is where it is painted.
     let mask_of = |s: &Stream| {
-        deref(doc, s.dict.get(b"SMask").ok()?)?
-            .as_stream()
-            .ok()
-            .cloned()
+        let stream = |key: &[u8]| deref(doc, s.dict.get(key).ok()?)?.as_stream().ok().cloned();
+        stream(b"SMask")
+            .map(|m| (m, false))
+            .or_else(|| stream(b"Mask").map(|m| (m, true)))
     };
     let backgrounds: Vec<&&Stream> = images.iter().filter(|s| mask_of(s).is_none()).collect();
-    let layers: Vec<(&Stream, Stream)> = images
+    let layers: Vec<(&Stream, (Stream, bool))> = images
         .iter()
         .filter_map(|s| Some((*s, mask_of(s)?)))
         .collect();
-    let ([background], Some((first, _))) = (backgrounds.as_slice(), layers.first()) else {
+    let ([background], false) = (backgrounds.as_slice(), layers.is_empty()) else {
         return None;
     };
-    let (w, h) = (
-        u32::try_from(first.dict.get(b"Width").ok()?.as_i64().ok()?).ok()?,
-        u32::try_from(first.dict.get(b"Height").ok()?.as_i64().ok()?).ok()?,
-    );
+    let size = |s: &Stream| {
+        Some((
+            u32::try_from(s.dict.get(b"Width").ok()?.as_i64().ok()?).ok()?,
+            u32::try_from(s.dict.get(b"Height").ok()?.as_i64().ok()?).ok()?,
+        ))
+    };
+    let (w, h) = std::iter::once(**background)
+        .chain(layers.iter().map(|(l, _)| *l))
+        .filter_map(size)
+        .max_by_key(|(w, h)| u64::from(*w) * u64::from(*h))?;
     fits(w, h, max_pixels)?;
     let base = colour(doc, background, max_pixels)?;
     let mut page = imageops::resize(&base, w, h, FilterType::Triangle);
-    for (layer, mask) in &layers {
+    for (layer, (mask, stencil)) in &layers {
         let mut colours = colour(doc, layer, max_pixels)?;
         if colours.dimensions() != (w, h) {
             colours = imageops::resize(&colours, w, h, FilterType::Triangle);
@@ -352,7 +361,7 @@ pub(crate) fn layered_page(
             imageops::resize(&alpha, w, h, FilterType::Nearest)
         };
         for (x, y, a) in alpha.enumerate_pixels() {
-            if a[0] >= 128 {
+            if (a[0] >= 128) != *stencil {
                 page.put_pixel(x, y, *colours.get_pixel(x, y));
             }
         }

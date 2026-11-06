@@ -296,6 +296,7 @@ fn finish(
         .clone()
         .filter(|l| !l.is_empty())
         .or_else(|| metadata.catalog_lang.clone());
+    let cover = pages.first().and_then(|p| p.cover.clone());
     Ok(Document {
         language,
         metadata,
@@ -310,6 +311,7 @@ fn finish(
             })
             .collect(),
         blocks: built.blocks,
+        cover,
     })
 }
 
@@ -383,7 +385,23 @@ fn scan_pages(
             };
         };
         match decode::gray(doc, image, max_pixels) {
-            Some(gray) => recognised(&engine, number, frame, &gray),
+            Some(gray) => {
+                let page = recognised(&engine, number, frame, &gray);
+                // Page 1 as a cover, by the rule of a scan with a text layer:
+                // what OCR reads on it stands in for that layer.
+                let cover = (number == 1 && text::is_cover_text(&page.blocks))
+                    .then(|| text::cover_picture(doc, id, max_pixels))
+                    .flatten();
+                match cover {
+                    Some(cover) => text::Page {
+                        number,
+                        size: page.size,
+                        cover: Some(cover),
+                        ..text::Page::default()
+                    },
+                    None => page,
+                }
+            }
             None => text::Page {
                 number,
                 size: frame.size(),

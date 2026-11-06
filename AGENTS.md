@@ -166,6 +166,18 @@ of level 1. Rules that hold across the Rust types and the CLI's file:
   page named after its number; those are ignored and still given raw in `metadata`.
 - **Italics** come from the font: its name, its slant or its italic flag. Text read
   through lopdf or OCR has none.
+- **The cover.** Page 1 is a cover, `cover` its picture, when a page image fills
+  it with no text drawn over it and under 300 characters of text under it, in a
+  PDF with a text layer; in a scan read by OCR, when a page image fills it and
+  OCR reads under 300 characters on it. Nothing of page 1 is then in `blocks`. The picture is
+  the PDF's own JPEG where it is one, a page put together from its layers as a
+  JPEG at quality 90, or a decoded image as a PNG; its size is the PDF's. A
+  scan's OCR layer is no text drawn over it: it is invisible (render mode 3), or
+  the picture is drawn over it. On 18 local PDFs, 12 covers were found and each
+  looked at, with no false one; 2 covers set their lettering in fonts over the
+  picture and are not found. Page images given as files have no cover yet. The
+  reader decides what to make of
+  it: paginaverto neither resizes nor re-encodes it for a target.
 - **`language`** is the option, else the catalog's `/Lang`, else none. Nothing is
   guessed. **`confidence`** is always `None`: ocrs gives only a character and a
   rectangle.
@@ -198,7 +210,8 @@ shows a kind it does not know as a paragraph, from its `runs`.
       "boxes": [], "confidence": null },
     { "id": "b3", "kind": "figure", "file": "figures/fig001.jpg",
       "media_type": "image/jpeg", "boxes": [] }
-  ]
+  ],
+  "cover": { "file": "figures/cover.jpg", "media_type": "image/jpeg" }
 }
 ```
 
@@ -297,7 +310,8 @@ paginaverto inspect -i book.pdf
 paginaverto inspect -i a.pdf -i b.pdf --format json
 ```
 
-`convert` takes one input and writes a zip of `document.json` and `figures/`:
+`convert` takes one input and writes a zip of `document.json` and `figures/`
+(with `figures/cover.jpg` or `.png` when there is a cover):
 `-o`, `-f`, `--language`, `--ocr-models <DIR>` (the `.onnx` files, else the
 `.rten`, refused unless their SHA-256 matches), `--threads`, `--format`. It never
 replaces a file without `-f`, never writes over its input, and a partial file

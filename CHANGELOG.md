@@ -11,6 +11,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The cover.** When page 1 of a PDF is a cover, a page image with no text
+  drawn over it and little text in its text layer or read by OCR, `Document::cover` holds its picture and nothing of
+  page 1 is in `blocks`. Before, a scan's cover came out as paragraphs of its
+  OCR layer, and a cover image as the first figure. The picture is the PDF's own
+  JPEG where it is one, else put together from the page's layers; its size is
+  the PDF's, and what to make of it is the reader's to decide. In `document.json`
+  it is `cover`, with the file `figures/cover.jpg` (or `.png`), and in the npm
+  package `Book.cover`. On 18 local PDFs, 12 covers were found and each looked
+  at, with no false one; page 1 of the 3 articles and of a scanned page of text
+  is left alone. Not found yet: 2 covers whose lettering is set in fonts over
+  the picture, which only drawing the page would give.
+- **Page layers through a stencil mask.** A scan page put together from a
+  background and a colour layer now also takes a layer shown through a stencil
+  `/Mask`, as some scanners make them, and not only through a soft mask; and
+  at the size of its largest layer.
+
 ### Fixed
 
 - **Soft hyphens join the word they break.** Some PDFs end a line with a soft

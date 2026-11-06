@@ -1048,3 +1048,242 @@ fn a_document_built_by_hand_splits_into_chapters() {
     assert!(chapters[1].blocks[0].runs()[1].italic);
     assert_eq!(chapters[1].blocks[1].level(), Some(2));
 }
+
+// ---------------------------------------------------------------------------
+// The cover
+
+/// A colour photo-like JPEG of 800 by 600: dark on its left half.
+fn cover_jpeg() -> Vec<u8> {
+    let img = image::RgbImage::from_fn(800, 600, |x, _| {
+        if x < 400 {
+            image::Rgb([40, 20, 120])
+        } else {
+            image::Rgb([230, 200, 60])
+        }
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    out
+}
+
+/// The page image drawn over the whole page.
+fn draw_image() -> Vec<Operation> {
+    vec![
+        op("q", vec![]),
+        op(
+            "cm",
+            vec![
+                595.into(),
+                0.into(),
+                0.into(),
+                842.into(),
+                0.into(),
+                0.into(),
+            ],
+        ),
+        op("Do", vec!["Im1".into()]),
+        op("Q", vec![]),
+    ]
+}
+
+/// Text at the top of the page in render mode `mode`.
+fn show(text: &str, mode: i64) -> Vec<Operation> {
+    vec![
+        op("BT", vec![]),
+        op("Tr", vec![mode.into()]),
+        op("Tf", vec!["F1".into(), 12.into()]),
+        op("Td", vec![72.into(), 760.into()]),
+        op("Tj", vec![Object::string_literal(text)]),
+        op("ET", vec![]),
+    ]
+}
+
+/// A scan with an OCR layer: page 1 as given, then two pages of text under
+/// their image.
+fn scan_with_cover(page_one: Vec<Operation>) -> (Vec<u8>, Vec<u8>) {
+    let jpeg = cover_jpeg();
+    let image = Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 800,
+            "Height" => 600,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+            "Filter" => "DCTDecode",
+        },
+        jpeg.clone(),
+    );
+    let body = |n: usize| {
+        let mut ops = draw_image();
+        let text = format!("Page {n} holds a sentence of ordinary words. ").repeat(6);
+        ops.extend(show(&text, 3));
+        ops
+    };
+    let bytes = pdf(simple_font, Some(image), &[page_one, body(2), body(3)]);
+    (bytes, jpeg)
+}
+
+fn read_scan(bytes: &[u8]) -> paginaverto::Document {
+    read(Input::Bytes(bytes), &Options::default()).unwrap()
+}
+
+fn mentions(doc: &paginaverto::Document, text: &str) -> bool {
+    doc.blocks.iter().any(|b| b.text().contains(text))
+}
+
+#[test]
+fn a_scanned_cover_is_its_picture_and_none_of_its_ocr_layer() {
+    let mut page = draw_image();
+    page.extend(show("THE TITLE", 3));
+    let (bytes, jpeg) = scan_with_cover(page);
+    let doc = read_scan(&bytes);
+    let cover = doc.cover.as_ref().expect("a cover");
+    assert_eq!(cover.media_type, "image/jpeg");
+    assert_eq!(cover.data, jpeg, "the PDF's own JPEG");
+    assert!(!mentions(&doc, "THE TITLE"));
+    assert!(mentions(&doc, "Page 2"));
+    assert!(
+        !doc.blocks
+            .iter()
+            .any(|b| matches!(b.kind, BlockKind::Figure(_)))
+    );
+}
+
+#[test]
+fn text_the_picture_is_drawn_over_is_hidden_too() {
+    let mut page = show("THE TITLE", 0);
+    page.extend(draw_image());
+    let (bytes, _) = scan_with_cover(page);
+    let doc = read_scan(&bytes);
+    assert!(doc.cover.is_some());
+    assert!(!mentions(&doc, "THE TITLE"));
+}
+
+#[test]
+fn lettering_set_over_the_picture_is_no_cover_to_give() {
+    let mut page = draw_image();
+    page.extend(show("THE TITLE", 0));
+    let (bytes, _) = scan_with_cover(page);
+    let doc = read_scan(&bytes);
+    assert!(doc.cover.is_none());
+    assert!(mentions(&doc, "THE TITLE"));
+}
+
+#[test]
+fn a_first_page_of_text_is_no_cover() {
+    let mut page = draw_image();
+    page.extend(show(&"A first page of ordinary words. ".repeat(12), 3));
+    let (bytes, _) = scan_with_cover(page);
+    let doc = read_scan(&bytes);
+    assert!(doc.cover.is_none());
+    assert!(mentions(&doc, "A first page"));
+}
+
+/// A scan's cover of two layers: a white background, and a red layer shown
+/// through a stencil mask on the left half only (a sample of 0 is painted).
+#[test]
+fn a_cover_of_layers_through_a_stencil_mask_is_put_together() {
+    let (w, h) = (800usize, 600usize);
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    // Scans store their layers as JPEG or JPEG 2000.
+    let raw = |rgb: [u8; 3]| {
+        let img = image::RgbImage::from_pixel(w as u32, h as u32, image::Rgb(rgb));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut out),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        out
+    };
+    let image = |data: Vec<u8>, extra: Option<(&str, Object)>| {
+        let mut dict = dictionary! {
+            "Type" => "XObject", "Subtype" => "Image", "Width" => w as i64,
+            "Height" => h as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode",
+        };
+        if let Some((k, v)) = extra {
+            dict.set(k, v);
+        }
+        Stream::new(dict, data)
+    };
+    // One bit a pixel, rows padded to a byte: 0 on the left half, 1 on the right.
+    let row: Vec<u8> = (0..w.div_ceil(8))
+        .map(|i| if i * 8 < w / 2 { 0x00 } else { 0xff })
+        .collect();
+    let mask = doc.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject", "Subtype" => "Image", "Width" => w as i64,
+            "Height" => h as i64, "ImageMask" => true, "BitsPerComponent" => 1,
+        },
+        row.repeat(h),
+    ));
+    let bg = doc.add_object(image(raw([255, 255, 255]), None));
+    let layer = doc.add_object(image(raw([200, 0, 0]), Some(("Mask", mask.into()))));
+    let font = simple_font(&mut doc).unwrap();
+    let font = doc.add_object(font);
+    let res = doc.add_object(dictionary! {
+        "Font" => dictionary! { "F1" => font },
+        "XObject" => dictionary! { "Bg" => bg, "CL" => layer },
+    });
+    let draw = |name: &str| {
+        vec![
+            op("q", vec![]),
+            op(
+                "cm",
+                vec![
+                    595.into(),
+                    0.into(),
+                    0.into(),
+                    842.into(),
+                    0.into(),
+                    0.into(),
+                ],
+            ),
+            op("Do", vec![name.into()]),
+            op("Q", vec![]),
+        ]
+    };
+    let mut cover = draw("Bg");
+    cover.extend(draw("CL"));
+    let mut body = draw("Bg");
+    body.extend(show(&"A sentence of ordinary words. ".repeat(6), 3));
+    let mut kids = Vec::new();
+    for ops in [cover, body.clone(), body] {
+        let c = doc.add_object(Stream::new(
+            dictionary! {},
+            Content { operations: ops }.encode().unwrap(),
+        ));
+        kids.push(Object::from(doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => c, "Resources" => res,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        })));
+    }
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 3 }),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+
+    let doc = read_scan(&bytes);
+    let cover = doc.cover.as_ref().expect("a cover");
+    let picture = image::load_from_memory(&cover.data).unwrap().into_rgb8();
+    assert_eq!(picture.dimensions(), (w as u32, h as u32));
+    let left = picture.get_pixel(100, 300);
+    let right = picture.get_pixel(700, 300);
+    assert!(left[0] > 150 && left[1] < 60, "red on the left: {left:?}");
+    assert!(
+        right.0.iter().all(|&c| c > 220),
+        "white on the right: {right:?}"
+    );
+}

@@ -231,7 +231,8 @@ fn write_zip(file: File, doc: &Document) -> io::Result<()> {
         BlockKind::Figure(f) => Some(f),
         _ => None,
     });
-    for (figure, name) in figures.zip(&names) {
+    let cover = doc.cover.as_ref().map(|f| (f, cover_name(f)));
+    for (figure, name) in figures.zip(names.iter().cloned()).chain(cover) {
         zip.start_file(
             name.as_str(),
             SimpleFileOptions::default()
@@ -350,6 +351,19 @@ struct FileDocument<'a> {
     metadata: FileMetadata<'a>,
     pages: Vec<FilePage<'a>>,
     blocks: Vec<FileBlock<'a>>,
+    /// Page 1's picture when it is a cover, else `null`.
+    cover: Option<FileCover>,
+}
+
+#[derive(Serialize)]
+struct FileCover {
+    file: String,
+    media_type: &'static str,
+}
+
+/// The cover's file in the zip.
+fn cover_name(f: &paginaverto::Figure) -> String {
+    format!("figures/cover.{}", f.ext)
 }
 
 #[derive(Serialize)]
@@ -443,6 +457,10 @@ impl<'a> FileDocument<'a> {
                 .iter()
                 .map(|b| file_block(b, &mut figures))
                 .collect(),
+            cover: doc.cover.as_ref().map(|f| FileCover {
+                file: cover_name(f),
+                media_type: f.media_type,
+            }),
         }
     }
 }
