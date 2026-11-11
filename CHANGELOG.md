@@ -11,6 +11,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-11
+
 ### Changed
 
 - **Dependencies brought up to date.** 21 crates in `Cargo.lock` move to

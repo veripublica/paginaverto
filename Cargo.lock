@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "hayro-ccitt",
  "hayro-jbig2",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto-ocr"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "image",
  "ocrs",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "paginaverto-wasm"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "getrandom",
  "js-sys",
