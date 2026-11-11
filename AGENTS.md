@@ -411,8 +411,11 @@ The engines are pinned exactly (lopdf 0.45.0, ocrs 0.13.1, rten 0.26.0, image
 0.11.3), because their behaviour is part of the output. lopdf, ocrs, rten and
 image have not moved since 0.1; each
 move changes the output, so each will be measured on its own.
-`Cargo.lock` matches epublift's versions package for package, so do not run a
-plain `cargo update`.
+The rest of `Cargo.lock` follows the veripublica family's dependency order:
+every crate it shares with a family project before paginaverto (styloria,
+epubveri, epubsana, kepubverto, imagoverto) is at that project's released
+version, and epublift follows paginaverto. So do not run a plain
+`cargo update`; move one crate at a time with `--precise`.
 
 ## Measurements
 

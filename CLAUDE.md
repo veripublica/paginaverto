@@ -18,8 +18,10 @@ paginaverto's output.
   and every change is measured on the 18 local PDFs and the public accuracy set.
 - epublift is **read only** (`/Users/baris/Documents/Projects/epublift`).
   Questions go by note. Write our own code.
-- `Cargo.lock` matches epublift's versions package for package. Do not run a
-  plain `cargo update`; engines are pinned with `=` in the workspace.
+- `Cargo.lock` follows R19: shared crates come from the project before us
+  (imagoverto's tag, then the ones before it), epublift follows us. Targets:
+  `family-deps.py --targets paginaverto`. Never a plain `cargo update`;
+  engines are pinned with `=` in the workspace.
 - Library on crates.io (`paginaverto`, `paginaverto-ocr`) and the browser
   binding on npm (`@veripublica/paginaverto-wasm`), from 0.1.2 on.
 

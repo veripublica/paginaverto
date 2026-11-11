@@ -11,6 +11,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependencies brought up to date.** 21 crates in `Cargo.lock` move to
+  newer patch releases. Among them, `zip` goes from 9.3.0 to 9.5.1 (it writes
+  the CLI's output), `flate2` to 1.1.11 and `wasm-bindgen` to 0.2.130. No
+  manifest changed. The output is unchanged: on 12 PDFs, the 11 that convert
+  give byte-identical zips, and the one refused gets the same error.
+
 ## [0.3.1] - 2026-11-06
 
 ### Added
