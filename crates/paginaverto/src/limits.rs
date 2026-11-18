@@ -152,17 +152,29 @@ impl Limits {
         Ok(())
     }
 
-    /// Load a PDF, its object streams bounded by the stream limit.
+    /// Load a PDF, its object streams bounded by the stream limit. A file is
+    /// read whole first, as lopdf would, so that its stream lengths can be
+    /// checked before lopdf parses it.
     pub(crate) fn load(&self, input: Input<'_>) -> Result<Document, Error> {
+        let owned;
+        let pdf = match input {
+            Input::Path(p) => {
+                owned = std::fs::read(p)
+                    .map_err(|e| Error::Open(crate::with_causes(&lopdf::Error::from(e))))?;
+                &owned[..]
+            }
+            Input::Bytes(b) => b,
+        };
+        crate::lengths::check(pdf)?;
         let options =
             lopdf::LoadOptions::with_max_decompressed_size(usize_limit(self.max_stream_bytes));
-        let doc = load_with(input, options).map_err(|e| match e {
+        let doc = load_with(pdf, options).map_err(|e| match e {
             lopdf::Error::Decompress(lopdf::DecompressError::MemoryLimitExceeded { .. }) => {
                 Self::exceeded(LimitKind::StreamBytes, self.max_stream_bytes)
             }
             e => Error::Open(crate::with_causes(&e)),
         })?;
-        if self.dropped_too_large_object_stream(input, &doc) {
+        if self.dropped_too_large_object_stream(pdf, &doc) {
             return Err(Self::exceeded(
                 LimitKind::StreamBytes,
                 self.max_stream_bytes,
@@ -175,7 +187,7 @@ impl Limits {
     /// saying so: the document would then look like something it is not, such
     /// as a scan. So when a container is missing, look at the containers again,
     /// this time undecoded.
-    fn dropped_too_large_object_stream(&self, input: Input<'_>, doc: &Document) -> bool {
+    fn dropped_too_large_object_stream(&self, pdf: &[u8], doc: &Document) -> bool {
         let missing = doc.reference_table.entries.values().any(|entry| {
             matches!(entry, XrefEntry::Compressed { container, .. }
                 if !doc.objects.contains_key(&(*container, 0)))
@@ -183,7 +195,7 @@ impl Limits {
         if !missing {
             return false;
         }
-        let Ok(raw) = load_with(input, lopdf::LoadOptions::with_filter(keep_undecoded)) else {
+        let Ok(raw) = load_with(pdf, lopdf::LoadOptions::with_filter(keep_undecoded)) else {
             return false;
         };
         raw.objects
@@ -193,11 +205,8 @@ impl Limits {
     }
 }
 
-fn load_with(input: Input<'_>, options: lopdf::LoadOptions) -> lopdf::Result<Document> {
-    match input {
-        Input::Path(p) => Document::load_with_options(p, options),
-        Input::Bytes(b) => Document::load_mem_with_options(b, options),
-    }
+fn load_with(pdf: &[u8], options: lopdf::LoadOptions) -> lopdf::Result<Document> {
+    Document::load_mem_with_options(pdf, options)
 }
 
 /// lopdf decodes only what is typed as an object stream, so an object stream

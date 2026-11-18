@@ -212,6 +212,58 @@ fn deep_nesting_in_an_object_does_not_abort() {
     let _ = read(Input::Bytes(&bytes), &Options::default());
 }
 
+/// Streams 1..=n, each taking its `/Length` from the next: lopdf follows
+/// such a chain with no bound on its depth (GHSA-4597-5x94-x3xg).
+fn length_chain(n: usize) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for id in 1..=n {
+        offsets.push(out.len());
+        let length = if id == n {
+            "1".to_string()
+        } else {
+            format!("{} 0 R", id + 1)
+        };
+        out.extend(
+            format!("{id} 0 obj\n<< /Length {length} >>\nstream\nA\nendstream\nendobj\n").bytes(),
+        );
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", n + 1).bytes());
+    for at in offsets {
+        out.extend(format!("{at:010} 00000 n \n").bytes());
+    }
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            n + 1
+        )
+        .bytes(),
+    );
+    out
+}
+
+#[test]
+fn a_chain_of_stream_lengths_is_refused_without_aborting() {
+    // 5,000 links overflow an 8 MiB stack inside lopdf 0.45: reaching the
+    // asserts is most of the test.
+    let bytes = length_chain(5_000);
+    let opts = Options::default();
+    assert!(matches!(
+        read(Input::Bytes(&bytes), &opts),
+        Err(Error::Open(_))
+    ));
+    assert!(matches!(
+        paginaverto::inspect(Input::Bytes(&bytes), &opts),
+        Err(Error::Open(_))
+    ));
+    let file = std::env::temp_dir().join(format!("paginaverto-chain-{}.pdf", std::process::id()));
+    std::fs::write(&file, &bytes).unwrap();
+    let from_disk = read(Input::Path(&file), &opts);
+    std::fs::remove_file(&file).unwrap();
+    assert!(matches!(from_disk, Err(Error::Open(_))));
+}
+
 #[test]
 fn cancelled_before_it_starts() {
     let opts = Options::default();

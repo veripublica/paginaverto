@@ -389,6 +389,11 @@ readable can still decode wrongly, if its encoding names glyphs without meaning.
   during the load or while OCR's models load.
 - The limits bound the work, but are no guarantee of a memory ceiling: a page's
   content is parsed into many times its own size.
+- A stream whose `/Length` points at an object with a referenced `/Length` of
+  its own is a link lopdf follows with no bound on the depth
+  (GHSA-4597-5x94-x3xg), and too deep a chain aborts the process. Every place
+  an object could start is checked before lopdf parses the file, and more than
+  32 links refuse it as `Error::Open`. A correct PDF has none.
 - The language is required for OCR, and recorded. OCR uses it for one thing: in
   Turkish and Azerbaijani, the Latin model favours İ over I and ı over i where it
   hesitates.
@@ -548,6 +553,10 @@ version, and epublift follows paginaverto. So do not run a plain
   2, 9.3 s and 961 MB at 4, 9.3 s and 1,387 MB at 8. Hence at most 4 by default.
   Larger page images would cost more memory; that is not measured. The default
   limits refused none of the 18.
+- **The stream-length check, 0.3.2 against the commit before,** 2026-11-19, on
+  12 local PDFs: the 11 that convert give byte-identical zips, and the one
+  refused gets the same error. On a 15 MB file, `inspect` takes 0.07 s
+  instead of 0.06 s.
 
 ## Layout
 

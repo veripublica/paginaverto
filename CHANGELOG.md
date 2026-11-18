@@ -11,6 +11,22 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Security
+
+- **A PDF can no longer crash the program through a chain of stream
+  lengths.** lopdf, the PDF parser underneath, reads a stream's `/Length`
+  that points at another stream by parsing that one first, and so on down
+  the chain, with no bound on the depth
+  ([GHSA-4597-5x94-x3xg](https://github.com/J-F-Liu/lopdf/security/advisories/GHSA-4597-5x94-x3xg),
+  every lopdf release so far). A file of 400 KB with a chain of 5,000 such
+  streams overflowed the stack and aborted the process: not a panic, so
+  `read` could not turn it into an error, and the program using paginaverto
+  went down with it. paginaverto now checks the file before lopdf parses it
+  and refuses one with more than 32 such links as `Error::Open`. A correct PDF
+  has none, since a length is a number. The output is unchanged: on 12 local
+  PDFs, the 11 that convert give byte-identical zips, and the one refused gets
+  the same error. The check adds about 15 ms to a 15 MB file.
+
 ## [0.3.2] - 2026-11-11
 
 ### Changed
