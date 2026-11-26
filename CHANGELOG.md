@@ -11,6 +11,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-26
+
+### Changed
+
+- **Dependencies brought up to date.** 17 crates in `Cargo.lock` move to
+  newer patch or minor releases. Among them, `zip` goes from 9.5.1 to 9.8.2
+  (it writes the CLI's output), `regex` to 1.13.2 and `rand` to 0.10.4. No
+  manifest changed. The output is unchanged: on 12 PDFs, the 11 that convert
+  give byte-identical zips, and the one refused gets the same error.
+
 ## [0.3.3] - 2026-11-19
 
 ### Security
